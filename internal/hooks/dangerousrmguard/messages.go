@@ -16,6 +16,7 @@ const (
 	idNoAsk  = "dangerous-rm-guard.no-ask"
 
 	idHowEmptyVar   = "dangerous-rm-guard.how.empty-variable"
+	idHowDerived    = "dangerous-rm-guard.how.derived-variable"
 	idHowCD         = "dangerous-rm-guard.how.cd"
 	idHowShape      = "dangerous-rm-guard.how.shape"
 	idHowGlob       = "dangerous-rm-guard.how.glob"
@@ -27,6 +28,7 @@ const (
 	idHowCmdsubGlob = "dangerous-rm-guard.how.substitution-glob"
 
 	idWhyEmptyVar   = "dangerous-rm-guard.why.empty-variable"
+	idWhyDerived    = "dangerous-rm-guard.why.derived-variable"
 	idWhyCmdsub     = "dangerous-rm-guard.why.substitution"
 	idWhyTooMany    = "dangerous-rm-guard.why.too-many-substitutions"
 	idWhyCD         = "dangerous-rm-guard.why.cd"
@@ -83,6 +85,13 @@ var messages = i18n.Register(i18n.Catalog{
 			"空変数の危険がそのまま残るので禁止です。\n" +
 			"そもそも削除が不要な手段があればそちらを優先してください " +
 			"(例: worktree の後始末は `git -C <main> worktree remove --force <path>` で足ります)。",
+	},
+	// REWRITE: 危険な右辺から作った変数。削除対象側の空チェックでは防げない。
+	idHowDerived: {
+		EN: "{{.NoAsk}} Use a literal absolute path for the deletion target. " +
+			"Checking the derived variable with `${VAR:?}` does not prevent its value from naming a top-level directory.",
+		JA: "{{.NoAsk}}削除対象をリテラルの絶対パスで指定してください。" +
+			"代入後の変数に `${VAR:?}` を付けても、最上位ディレクトリを指す値は防げません。",
 	},
 	// REWRITE: cd の後の相対 glob。cd を外して 1 つのパスで指させ、cd の位置だけを変える形を禁じる。
 	idHowCD: {
@@ -231,6 +240,13 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "削除対象が `$変数/` で始まっており、変数が未定義・空のときに削除対象が " +
 			"ファイルシステムのルート (や最上位ディレクトリ) に化けます。" +
 			"変数の中身は実行前に確定できないため、静的には安全と判定できません。",
+	},
+	// 危険な右辺を経由した変数は、値が空でなくてもルート直下を指し得る。
+	idWhyDerived: {
+		EN: "The target is a variable assigned from a path beginning with another variable and `/`. " +
+			"If that source variable is empty, the assigned value can name a top-level directory.",
+		JA: "削除対象の変数には、別の変数と `/` で始まるパスが代入されています。" +
+			"代入元の変数が空なら、代入後の値は最上位ディレクトリを指し得ます。",
 	},
 	idWhyCmdsub: {
 		EN: "A command substitution contains a deletion whose target is a variable that may be empty. " +
