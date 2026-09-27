@@ -9,14 +9,15 @@
 // 同じ条件を先回りで deny すれば、ダイアログは出ず、Claude 側は理由文を受け取って次の手を決められる。
 //
 // 方針:
-//   - 判定は Claude Code v2.1.239 の組み込みのロジックを移植したものである。ask になっていたケースだけを deny にし、
-//     それ以外の挙動は変えない。現行の Claude Code で組み込みの判定が変わっている可能性は未確認で、追従していない。
+//   - 基本の判定は Claude Code v2.1.239 の組み込みのロジックを移植した。先行代入から派生した変数の削除は
+//     v2.1.283 の判定を移した。その他の新しい分岐への追従は未確認である。
 //   - 理由文は REWRITE と REPORT の 2 系統に分ける（messages.go）。REWRITE の案内には「ガードが働く形」だけを書く。
 //     `"$BASE/x$name"` のように 1 文字挟んで正規表現を外す迂回を案内すると、安全性を上げずに検出だけ消えるので明示的に禁じる。
 //
 // 移植した分岐（組み込みのメッセージ → この hook の扱い）:
 //
 //	on possibly-empty variable path             → REWRITE  (A6V)
+//	... via a derived variable                  → REWRITE  (v2.1.283 の e$t / i$t)
 //	... inside command substitution             → REWRITE  (A6V を置換の中身にも適用)
 //	too many command substitutions to analyze   → REWRITE  (64 個超)
 //	on statically-unresolvable target           → REWRITE  (V7r の分岐 A / B / D)
@@ -162,6 +163,9 @@ func evaluate(command, cwd string) (finding, error) {
 	if name, arg := findDangerousRemoval(command); name != "" {
 		return finding{target: idEmptyVar, command: name, token: arg, why: idWhyEmptyVar, how: idHowEmptyVar}, nil
 	}
+	if name, arg := findDerivedVariableRemoval(command); name != "" {
+		return finding{target: idEmptyVar, command: name, token: arg, why: idWhyDerived, how: idHowDerived}, nil
+	}
 	if name, arg := findInSubstitution(command); name != "" {
 		return finding{target: idCmdsub, command: name, token: arg, why: idWhyCmdsub, how: idHowCmdsub}, nil
 	}
@@ -215,6 +219,15 @@ var (
 	l6vRE = regexp.MustCompile(`^` + assignments + `\\?(?:[^=` + py.SpaceChars + `]*/)?(rm|rmdir)(?:` + py.Space + `|\z)`)
 	// a6vRE は削除対象が `$VAR/` で始まり、直後が * $ / クォート 末尾 のいずれかかである。
 	a6vRE = regexp.MustCompile(`^"?\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)"?/(?:\*|\$|/|["']|\z)`)
+	// Claude Code v2.1.283 の e$t: 代入の右辺が空変数からルート直下へ広がる形。
+	// 実装で使わない \uE020（引用済み区切りの番兵）は除いた。
+	derivedRootRE = regexp.MustCompile(`^["']*\$(?:\{[A-Za-z_][A-Za-z0-9_]*` +
+		`(?::?-(?:["']{2}|"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?)?)?\}|[A-Za-z_][A-Za-z0-9_]*)` +
+		`["']*\\?/(?:[*?[{]|\$|/|["']|\z)`)
+	// 同版の i$t: 単独の変数展開を削除対象にした形。
+	bareVariableRE = regexp.MustCompile(`^["']*\$(?:\{([A-Za-z_][A-Za-z0-9_]*)` +
+		`(?::?[?-][^}]*)?\}|([A-Za-z_][A-Za-z0-9_]*))["']*\z`)
+	assignmentRE = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=([^` + py.SpaceChars + `;&|]+)(?:` + py.Space + `|\z)`)
 
 	lineContinuationRE = regexp.MustCompile(`\\\r?\n`)
 	backtickRE         = regexp.MustCompile("`([^`]*)`")
@@ -611,6 +624,45 @@ func findDangerousRemoval(command string) (name, target string) {
 				}
 			case a6vRE.MatchString(arg):
 				return segment.name, arg
+			}
+		}
+	}
+	return "", ""
+}
+
+// findDerivedVariableRemoval は、危険な形の右辺を代入した変数を後で丸ごと削除する形を見つける。
+// v2.1.283 は D=$S/$n; rm -rf $D を、代入元の $S が空ならルート直下になるとして ask にする。
+// 通常の rm -rf $DIR は従来どおり通し、代入の後の削除だけを対象にする。
+func findDerivedVariableRemoval(command string) (name, target string) {
+	derived := make(map[string]bool)
+	for _, segment := range segmentRE.Split(flatten(command, " "), -1) {
+		head := py.LStrip(segment)
+		for _, keyword := range []string{"do", "then", "else"} {
+			if strings.HasPrefix(head, keyword+" ") {
+				head = py.LStrip(head[len(keyword):])
+				break
+			}
+		}
+		if match := assignmentRE.FindStringSubmatch(head); match != nil {
+			derived[match[1]] = derivedRootRE.MatchString(match[2])
+		}
+		for _, removal := range removalSegments(head, " ") {
+			for _, arg := range removal.args {
+				match := bareVariableRE.FindStringSubmatch(arg)
+				if match == nil {
+					arg = trailingClosersRE.ReplaceAllLiteralString(arg, "")
+					match = bareVariableRE.FindStringSubmatch(arg)
+				}
+				if match == nil {
+					continue
+				}
+				variable := match[1]
+				if variable == "" {
+					variable = match[2]
+				}
+				if derived[variable] {
+					return removal.name, arg
+				}
 			}
 		}
 	}

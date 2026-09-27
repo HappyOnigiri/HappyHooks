@@ -109,6 +109,26 @@ func TestEmptyVariableForms(t *testing.T) {
 	check(t, hooktest.Deny, denyAll(labelEmptyVar, "rmdir $DIR/*", "rmdir -- ${DIR}/*"))
 }
 
+func TestDerivedVariableRemoval(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelEmptyVar,
+		"S=/private/tmp/scratchpad; for n in a b; do D=$S/$n; rm -rf $D; git clone /tmp/source $D; done",
+		`D="$BASE/$name"; rm -rf "$D"`,
+		"D=$BASE/$name; rm -rf ${D}",
+	))
+	reason := reasonOf(t, "D=$BASE/$name; rm -rf $D", "/tmp")
+	if !strings.Contains(reason, messages.T(hooktest.Language, idWhyDerived)) ||
+		!strings.Contains(reason, messages.Text(hooktest.Language, idHowDerived, map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
+		t.Errorf("derived variable reason: %q", reason)
+	}
+	check(t, "", hooktest.Commands(
+		"rm -rf $D",
+		"D=/tmp/work/a; rm -rf $D",
+		"D=$BASE/$name; D=/tmp/work/a; rm -rf $D",
+		"rm -rf $D; D=$BASE/$name",
+		"D=$BASE/build; rm -rf $D",
+	))
+}
+
 // 先行代入・パス指定・エスケープつきの起動と、シェルの区切り。
 func TestEmptyVariableInvocationForms(t *testing.T) {
 	check(t, hooktest.Deny, hooktest.Commands(
