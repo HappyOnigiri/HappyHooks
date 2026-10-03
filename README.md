@@ -21,6 +21,7 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 | [`idle-wait-guard`](docs/hooks/idle-wait-guard.md) | Stops commands used only to fill time | On |
 | [`forbidden-term-guard`](docs/hooks/forbidden-term-guard.md) | Blocks configured terms in PR and issue bodies | On |
 | [`irreversible-guard`](docs/hooks/irreversible-guard.md) | Blocks irreversible operations | On |
+| [`generated-edit-guard`](docs/hooks/generated-edit-guard.md) | Stops hand edits of generated files | On |
 | [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.md) | Stops risky `rm` commands before Claude Code asks for confirmation | On (Claude Code) |
 | [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.md) | Keeps plan mode open until background agents finish | On (Claude Code) |
 | [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.md) | Blocks changes to Git hook settings | Off |
