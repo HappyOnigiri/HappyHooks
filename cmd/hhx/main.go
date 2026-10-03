@@ -9,6 +9,7 @@ import (
 
 	"github.com/HappyOnigiri/hhx/internal/config"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/hooks/generatededitguard"
 	"github.com/HappyOnigiri/hhx/internal/registry"
 	"github.com/HappyOnigiri/hhx/internal/version"
 )
@@ -33,6 +34,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runWaitCI(args[1:], stdout, stderr)
 	case "update":
 		return runUpdate(args[1:], stdout, stderr)
+	case generatededitguard.DeclareCommand:
+		return runAllowGeneratedEdit(args[1:], stdout, stderr)
 	case "-v", "--version", "version":
 		_, _ = fmt.Fprintln(stdout, "hhx version "+version.String())
 		return 0

@@ -12,7 +12,7 @@ GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal
 	./internal/hooks/githookspathguard ./internal/hooks/irreversibleguard ./internal/hooks/dangerousrmguard \
 	./internal/hooks/discardguard ./internal/hooks/exitplansubagentguard ./internal/waitci \
 	./internal/hooks/pushcicontext ./internal/hooks/prbodystaleness ./internal/hooks/prcontext \
-	./internal/hooks/agentslocalcontext ./internal/hookexec ./internal/hookcache ./internal/toolresponse ./internal/i18n
+	./internal/hooks/agentslocalcontext ./internal/hooks/generatededitguard ./internal/hookexec ./internal/hookcache ./internal/toolresponse ./internal/i18n
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
 # CI は CITEST に citest のパスを渡し、落ちたテストだけを 1 回再実行して報告を CI_TEST_ARTIFACT_DIR に残す。

@@ -23,6 +23,13 @@ const (
 	idUnknownHooks       = "cli.install.unknown-hooks"
 	idInvalidLanguage    = "cli.install.invalid-language"
 
+	idAllowUsage         = "cli.allow-generated-edit.usage"
+	idAllowNoReason      = "cli.allow-generated-edit.no-reason"
+	idAllowNoPaths       = "cli.allow-generated-edit.no-paths"
+	idAllowUnknownOption = "cli.allow-generated-edit.unknown-option"
+	idAllowDeclared      = "cli.allow-generated-edit.declared"
+	idAllowDisabled      = "cli.allow-generated-edit.disabled"
+
 	idApplyFlag      = "cli.update.apply-flag"
 	idDevelopment    = "cli.update.development-build"
 	idUpToDate       = "cli.update.up-to-date"
@@ -72,6 +79,8 @@ var messages = i18n.Register(i18n.Catalog{
                             Remove hhx hooks from the agent settings
   hhx wait-ci [reference] [options]
                             Report the CI result of a pull request once every check has finished
+  hhx allow-generated-edit --reason <text> <path>...
+                            Declare a user-instructed hand edit of generated files
   hhx update [--apply]      Check GitHub Releases for a newer hhx (and install it)
   hhx version               Print the version
 `,
@@ -83,6 +92,8 @@ var messages = i18n.Register(i18n.Catalog{
                             hhx の hook を agent の設定から外す
   hhx wait-ci [reference] [options]
                             PR の全 check が終わったら、CI の結果を 1 回だけ報告する
+  hhx allow-generated-edit --reason <text> <path>...
+                            ユーザーが指示した生成ファイルの手編集を宣言する
   hhx update [--apply]      GitHub Releases で新しい hhx を確かめる（--apply で入れる）
   hhx version               版を表示する
 `,
@@ -121,6 +132,42 @@ var messages = i18n.Register(i18n.Catalog{
 	idInvalidLanguage: {
 		EN: "{{.Path}}: language must be en or ja, got {{.Value}}",
 		JA: "{{.Path}}: language は en か ja で指定する（{{.Value}} は使えない）",
+	},
+
+	// 宣言の使い方。ユーザーの明示的な指示があるときだけ使うことと、記録は hook が行うことを伝える。
+	idAllowUsage: {
+		EN: "Usage: hhx allow-generated-edit --reason <the user's instruction> <path>...\n\n" +
+			"Declare that the user explicitly told the agent to hand-edit these generated files. generated-edit-guard " +
+			"records the declaration for the agent session when it sees this command, and allows edits of the paths " +
+			"for the rest of the session. Run it only on the user's explicit instruction.\n",
+		JA: "使い方: hhx allow-generated-edit --reason <ユーザーの指示> <path>...\n\n" +
+			"ユーザーが生成ファイルの手編集を明示的に指示したことを宣言する。generated-edit-guard がこのコマンドを見つけて" +
+			"エージェントのセッションに記録し、そのセッションの間は指定したパスの編集を通す。ユーザーの明示的な指示があるときだけ実行する。\n",
+	},
+	idAllowNoReason: {
+		EN: "hhx allow-generated-edit: --reason is required (summarize the user's instruction)",
+		JA: "hhx allow-generated-edit: --reason が必要（ユーザーの指示の要旨を書く）",
+	},
+	idAllowNoPaths: {
+		EN: "hhx allow-generated-edit: pass at least one path",
+		JA: "hhx allow-generated-edit: パスを 1 つ以上指定する",
+	},
+	idAllowUnknownOption: {
+		EN: "hhx allow-generated-edit: unknown option {{.Option}}",
+		JA: "hhx allow-generated-edit: 未知のオプション {{.Option}}",
+	},
+	// 宣言を受け付けた。最終報告に載せる 3 点をエージェントに念押しする。
+	idAllowDeclared: {
+		EN: "Declared hand edits of generated files: {{.Paths}}\n" +
+			"generated-edit-guard recorded this for the current agent session. In the final report, list the files, " +
+			"the reason and the user's instruction, and that the files must be regenerated.\n",
+		JA: "生成ファイルの手編集を宣言した: {{.Paths}}\n" +
+			"generated-edit-guard が現在のエージェントのセッションに記録した。最終報告に、ファイル・理由とユーザーの指示・" +
+			"作り直しが必要なことを書く。\n",
+	},
+	idAllowDisabled: {
+		EN: "generated-edit-guard is disabled, so generated files are not blocked and no declaration is needed.\n",
+		JA: "generated-edit-guard は無効なので、生成ファイルの編集は止まらず、宣言は要らない。\n",
 	},
 
 	idApplyFlag: {EN: "install the latest release", JA: "最新のリリースを入れる"},

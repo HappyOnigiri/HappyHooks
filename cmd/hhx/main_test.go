@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 	"github.com/HappyOnigiri/hhx/internal/registry"
 )
 
@@ -162,8 +163,8 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 	claude := strings.Join([]string{
 		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=15 statusMessage=Checking PR body freshness...",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
-			"forbidden-term-guard, idle-wait-guard",
-		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard",
+			"forbidden-term-guard, idle-wait-guard, generated-edit-guard",
+		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard, generated-edit-guard",
 		"PreToolUse [ExitPlanMode] exit-plan-subagent-guard",
 		"UserPromptSubmit [(none)] pr-context timeout=15 statusMessage=Fetching PR context...",
 	}, "\n")
@@ -174,8 +175,10 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		"PostToolUse [Bash] push-ci-context timeout=10 additionalContextLimit=4096, " +
 			"pr-body-staleness timeout=15 statusMessage=Checking PR body freshness... additionalContextLimit=4096",
 		"PreToolUse [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
-		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard",
-		"PreToolUse [^(apply_patch|Edit|Write)$] git-hookspath-guard, irreversible-guard",
+		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard, " +
+			"generated-edit-guard additionalContextLimit=4096",
+		"PreToolUse [^(apply_patch|Edit|Write)$] git-hookspath-guard, irreversible-guard, " +
+			"generated-edit-guard additionalContextLimit=4096",
 		"SessionStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
 		"SessionStart [^compact$] agents-local-context timeout=10 additionalContextLimit=32768",
 		"SubagentStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
@@ -203,6 +206,49 @@ func TestHookDispatchesToRegisteredHook(t *testing.T) {
 	code, stdout, _ = runCommand(t, "", "hook", "git-hookspath-guard", "git config core.hooksPath x")
 	if code != 0 || stdout != "" {
 		t.Fatalf("default-off hook: code=%d stdout=%q", code, stdout)
+	}
+}
+
+// TestAllowGeneratedEdit は宣言のサブコマンドの形の検査と出力を確かめる。記録は hook が行うので、CLI はファイルに書かない。
+func TestAllowGeneratedEdit(t *testing.T) {
+	home, _ := isolate(t)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	code, stdout, stderr := runCommand(t, "", "allow-generated-edit", "--reason", "the user asked", "gen.go", "b.go")
+	want := messages.Text(i18n.English, idAllowDeclared, map[string]any{"Paths": "gen.go, b.go"})
+	if code != 0 || stdout != want || stderr != "" {
+		t.Fatalf("declare: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(home, "cache")); !os.IsNotExist(err) {
+		t.Errorf("the CLI must not record the declaration: %v", err)
+	}
+	for _, testCase := range []struct {
+		args []string
+		id   string
+	}{
+		{[]string{"gen.go"}, idAllowNoReason},
+		{[]string{"--reason=", "gen.go"}, idAllowNoReason},
+		{[]string{"--reason", "x"}, idAllowNoPaths},
+		{[]string{"--force", "--reason", "x", "gen.go"}, idAllowUnknownOption},
+	} {
+		code, stdout, stderr := runCommand(t, "", append([]string{"allow-generated-edit"}, testCase.args...)...)
+		want := messages.Text(i18n.English, testCase.id, map[string]any{"Option": "--force"})
+		if code != 2 || stdout != "" || !strings.HasPrefix(stderr, want+"\n\n") ||
+			!strings.HasSuffix(stderr, messages.T(i18n.English, idAllowUsage)) {
+			t.Errorf("%q: code=%d stdout=%q stderr=%q", testCase.args, code, stdout, stderr)
+		}
+	}
+	if code, stdout, _ := runCommand(t, "", "allow-generated-edit", "--help"); code != 0 ||
+		stdout != messages.T(i18n.English, idAllowUsage) {
+		t.Errorf("help: code=%d stdout=%q", code, stdout)
+	}
+	config := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(config, []byte("hooks:\n  generated-edit-guard:\n    enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HHX_CONFIG", config)
+	code, stdout, _ = runCommand(t, "", "allow-generated-edit", "--reason", "x", "gen.go")
+	if code != 0 || stdout != messages.T(i18n.English, idAllowDisabled) {
+		t.Errorf("disabled: code=%d stdout=%q", code, stdout)
 	}
 }
 
