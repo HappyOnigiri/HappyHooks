@@ -5,8 +5,6 @@
 // 値の設定と削除だけを止め、読み取り（git config core.hooksPath / --get / --list / grep など）はすべて通す。
 // Edit / Write は内容ではなく対象のパスで判定する。全体の置き換えでは、新しい内容に core.hooksPath が無くても既存の設定を消せるためである。
 // Bash では、同じパスへの明白なリダイレクト・置換・削除を止める。
-//
-// 既定では無効で、設定で enabled: true にした人にだけ働く（global の hook から委譲する運用をしている人向けのため）。
 package githookspathguard
 
 import (
@@ -25,7 +23,7 @@ const Name = "git-hookspath-guard"
 func Definition() hookrt.Definition {
 	return hookrt.Definition{
 		Name:           Name,
-		DefaultEnabled: false,
+		DefaultEnabled: true,
 		Registrations: []hookrt.Registration{
 			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Bash"},
 			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Edit|Write|MultiEdit|NotebookEdit"},

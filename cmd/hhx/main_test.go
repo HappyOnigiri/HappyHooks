@@ -204,10 +204,10 @@ func TestHookDispatchesToRegisteredHook(t *testing.T) {
 	if code != 0 || !strings.Contains(stdout, `"permissionDecision":"deny"`) {
 		t.Fatalf("argv: code=%d stdout=%q", code, stdout)
 	}
-	// git-hookspath-guard は既定で無効である。
+	// git-hookspath-guard は既定で有効である。
 	code, stdout, _ = runCommand(t, "", "hook", "git-hookspath-guard", "git config core.hooksPath x")
-	if code != 0 || stdout != "" {
-		t.Fatalf("default-off hook: code=%d stdout=%q", code, stdout)
+	if code != 0 || !strings.Contains(stdout, `"permissionDecision":"deny"`) {
+		t.Fatalf("default-on hook: code=%d stdout=%q", code, stdout)
 	}
 }
 
