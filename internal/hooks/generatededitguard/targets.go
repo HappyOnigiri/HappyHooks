@@ -26,6 +26,8 @@ const (
 type declared struct {
 	reason string
 	paths  []string
+	// unresolved は静的に決まらず記録できなかったパスの表記である（変数やコマンド置換を含む）。
+	unresolved []string
 }
 
 // bashScan はコマンド文字列を作業ディレクトリを辿りながら走査し、書き込み先の候補と宣言を集める。
@@ -34,12 +36,19 @@ type bashScan struct {
 	// outer はサブシェルに入る前の作業ディレクトリ、dirs は pushd で積んだ作業ディレクトリである。
 	outer, dirs  []string
 	paths        []string
+	seen         map[string]bool
 	declarations []declared
+	// direct は cp・mv・install 以外の書き込みで候補にしたパスである。copies はコピーの書き込み先ごとの送り元である。
+	// 送り元がすべて生成ファイルか生成器の出力なら、作り直した結果を置く正規の形として通す（direct にあれば通さない）。
+	direct  map[string]bool
+	copies  map[string][]string
+	outputs map[string]bool
 }
 
 // scanBash は command の書き込み先の候補（絶対パス）と宣言を返す。cwd は走査を始める作業ディレクトリである。
 func scanBash(command, cwd string) *bashScan {
-	scan := &bashScan{cwd: cwd}
+	scan := &bashScan{cwd: cwd, seen: map[string]bool{}, direct: map[string]bool{}, copies: map[string][]string{},
+		outputs: map[string]bool{}}
 	scan.walk(parseShell(command, 0), 0)
 	return scan
 }
@@ -62,10 +71,37 @@ func (s *bashScan) walk(steps []step, depth int) {
 
 func (s *bashScan) add(paths ...string) {
 	for _, path := range paths {
-		if !slices.Contains(s.paths, path) {
-			s.paths = append(s.paths, path)
+		s.direct[path] = true
+		s.record(path)
+	}
+}
+
+// record は候補に足す。重複は map で除く（候補が多い入力でも 2 乗の時間にしない）。
+func (s *bashScan) record(path string) {
+	if !s.seen[path] {
+		s.seen[path] = true
+		s.paths = append(s.paths, path)
+	}
+}
+
+// addCopy はコピーの書き込み先を、送り元とともに候補に足す。
+func (s *bashScan) addCopy(destination string, sources []string) {
+	s.copies[destination] = append(s.copies[destination], sources...)
+	s.record(destination)
+}
+
+// copiedFromGenerated は path がコピーでだけ書かれ、送り元がすべて生成器の出力か generated を満たすファイルかを返す。
+func (s *bashScan) copiedFromGenerated(path string, generated func(string) bool) bool {
+	sources, ok := s.copies[path]
+	if !ok || s.direct[path] || len(sources) == 0 {
+		return false
+	}
+	for _, source := range sources {
+		if !s.outputs[source] && !generated(source) {
+			return false
 		}
 	}
+	return true
 }
 
 // addWords は語をパスとして解決し、候補に足す。
@@ -89,15 +125,90 @@ func (s *bashScan) resolve(w word) []string {
 		}
 		text = home + text[1:]
 	}
-	path := s.absolute(text)
-	if !w.glob {
-		return []string{path}
+	texts := []string{text}
+	if w.brace {
+		texts = braceExpand(text, maxGlobMatches)
 	}
-	matches, err := filepath.Glob(path)
-	if err != nil || len(matches) == 0 {
-		return []string{path}
+	var out []string
+	for _, expanded := range texts {
+		path := s.absolute(expanded)
+		if !w.glob {
+			out = append(out, path)
+			continue
+		}
+		matches, err := filepath.Glob(path)
+		if err != nil || len(matches) == 0 {
+			out = append(out, path)
+			continue
+		}
+		out = append(out, matches[:min(len(matches), maxGlobMatches)]...)
 	}
-	return matches[:min(len(matches), maxGlobMatches)]
+	return out
+}
+
+// braceExpand はシェルのブレース展開（a{b,c}d → abd acd）を、結果が limit 件を超えない範囲で行う。
+// カンマを含まない {} はそのまま残す。{1..3} の範囲は展開しない。
+func braceExpand(text string, limit int) []string {
+	open := -1
+	depth := 0
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case '{':
+			if depth == 0 {
+				open = index
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth != 0 {
+				continue
+			}
+			parts := splitTopLevel(text[open+1 : index])
+			if len(parts) < 2 {
+				// カンマの無い括弧は展開しない。後ろにある括弧を展開する。
+				rest := braceExpand(text[index+1:], limit)
+				out := make([]string, 0, len(rest))
+				for _, tail := range rest {
+					out = append(out, text[:index+1]+tail)
+				}
+				return out
+			}
+			var out []string
+			for _, part := range parts {
+				for _, expanded := range braceExpand(text[:open]+part+text[index+1:], limit) {
+					if len(out) >= limit {
+						return out
+					}
+					out = append(out, expanded)
+				}
+			}
+			return out
+		}
+	}
+	return []string{text}
+}
+
+// splitTopLevel は括弧の外のカンマで区切る。
+func splitTopLevel(text string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, text[start:index])
+				start = index + 1
+			}
+		}
+	}
+	return append(parts, text[start:])
 }
 
 func (s *bashScan) absolute(path string) string {
@@ -130,17 +241,27 @@ func (s *bashScan) command(c *command, depth int) {
 	}
 	inline := false
 	if kind := interpreterKind(name); kind != "" {
-		if kind == "perl" && perlInPlace(args) {
-			s.addWords(perlFiles(args))
+		if (kind == "perl" || kind == "ruby") && inPlace(args, inPlaceValued[kind]) {
+			s.addWords(scriptFiles(args))
 		}
 		inline = s.inlineCode(kind, c, args)
 	}
+	if awkNames[name] && awkInPlace(args) {
+		s.addWords(awkFiles(args))
+	}
 	// コマンドの無いリダイレクト（> gen.go）はファイルを空にするので、手書きと同じに扱う。
-	if len(args) == 0 || handWriters[name] || inline {
-		for _, r := range c.redirects {
-			if writeRedirects[r.op] || (r.op == ">&" && !isFD(r.target.text)) {
-				s.addWords([]word{r.target})
-			}
+	// それ以外のコマンド（生成器やスクリプト）の出力の行き先は、コピーの送り元として覚える。
+	hand := len(args) == 0 || handWriters[name] || inline
+	for _, r := range c.redirects {
+		if !writeRedirects[r.op] && (r.op != ">&" || isFD(r.target.text)) {
+			continue
+		}
+		if hand {
+			s.addWords([]word{r.target})
+			continue
+		}
+		for _, path := range s.resolve(r.target) {
+			s.outputs[path] = true
 		}
 	}
 	if len(args) == 0 {
@@ -171,7 +292,11 @@ func (s *bashScan) command(c *command, depth int) {
 			}
 		}
 	case name == "patch":
-		s.patchTargets(c, args)
+		if !slices.ContainsFunc(args, func(w word) bool {
+			return w.text == "--dry-run" || w.text == "--check" || w.text == "-C"
+		}) {
+			s.patchTargets(c, args)
+		}
 	case name == "git":
 		s.gitTargets(c, args)
 	case name == "apply_patch" || name == "applypatch":
@@ -328,7 +453,8 @@ func sedInPlace(args []word) bool {
 			continue
 		}
 		for _, letter := range text[1:] {
-			if letter == 'i' {
+			// -I は macOS の sed の in-place である。
+			if letter == 'i' || letter == 'I' {
 				return true
 			}
 			// -e・-f・-l は残りが値なので、その先の i は -i ではない。
@@ -340,19 +466,26 @@ func sedInPlace(args []word) bool {
 	return false
 }
 
-// perlInPlace は perl の引数に -i（-pi・-i.bak のようにまとめたものを含む）があるかを返す。
-func perlInPlace(args []word) bool {
-	for _, arg := range args[1:] {
-		text := arg.text
+// inPlaceValued は perl・ruby の短いオプションのうち、残りか次の引数を値に取るものである。
+var inPlaceValued = map[string]string{"perl": "eEMmIxdC0l", "ruby": "eErIC0xFlKTWU"}
+
+// inPlace は perl・ruby の引数に -i（-pi・-i.bak のようにまとめたものを含む）があるかを返す。
+// オプションは最初のオプションでない引数（スクリプトのファイルか、-e が無ければそのファイル）までで、-e の値はその間に挟まる。
+func inPlace(args []word, valued string) bool {
+	for index := 1; index < len(args); index++ {
+		text := args[index].text
 		if !strings.HasPrefix(text, "-") || text == "-" || text == "--" {
 			return false
 		}
-		for _, letter := range text[1:] {
+		for position, letter := range text[1:] {
 			if letter == 'i' {
 				return true
 			}
-			// 値を取る短いオプション。残りは値なので、その先の i は -i ではない。
-			if strings.ContainsRune("eEMmIxdC0l", letter) {
+			if strings.ContainsRune(valued, letter) {
+				// 値がくっついていなければ、次の引数が値である（-pe 'code'）。
+				if position == len(text)-2 && (letter == 'e' || letter == 'E') {
+					index++
+				}
 				break
 			}
 		}
@@ -360,8 +493,8 @@ func perlInPlace(args []word) bool {
 	return false
 }
 
-// perlFiles は perl -i の対象のファイル（コードの後ろの引数）を返す。-e が無ければ最初の引数はスクリプトである。
-func perlFiles(args []word) []word {
+// scriptFiles は perl・ruby -i の対象のファイル（コードの後ろの引数）を返す。-e が無ければ最初の引数はスクリプトである。
+func scriptFiles(args []word) []word {
 	hasCode := false
 	var files []word
 	for index := 1; index < len(args); index++ {
@@ -387,6 +520,47 @@ func perlFiles(args []word) []word {
 	return files
 }
 
+var awkNames = map[string]bool{"awk": true, "gawk": true}
+
+// awkInPlace は gawk の -i inplace（--include=inplace）があるかを返す。
+func awkInPlace(args []word) bool {
+	for index := 1; index < len(args); index++ {
+		text := args[index].text
+		next := ""
+		if index+1 < len(args) {
+			next = args[index+1].text
+		}
+		if ((text == "-i" || text == "--include") && next == "inplace") || text == "-iinplace" ||
+			text == "--include=inplace" {
+			return true
+		}
+	}
+	return false
+}
+
+// awkFiles は gawk -i inplace の対象のファイルを返す。-f / -e が無ければ最初の引数はプログラムである。
+func awkFiles(args []word) []word {
+	valued := map[string]bool{"-f": true, "-v": true, "-i": true, "-e": true, "-F": true, "--include": true,
+		"--file": true, "--source": true, "--assign": true, "--field-separator": true}
+	program := false
+	for _, arg := range args[1:] {
+		if arg.text == "-f" || arg.text == "-e" || arg.text == "--file" || arg.text == "--source" {
+			program = true
+		}
+	}
+	files := operands(args, valued)
+	if !program && len(files) > 0 {
+		files = files[1:]
+	}
+	var out []word
+	for _, file := range files {
+		if !strings.Contains(file.text, "=") {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
 // copyTargets は cp・mv・install の書き込み先を足す。最後の引数（-t があればその値）がディレクトリなら、その下の同名のファイルにする。
 func (s *bashScan) copyTargets(name string, args []word) {
 	valued := map[string]bool{"-t": true, "-S": true, "--target-directory": true, "--suffix": true}
@@ -401,11 +575,13 @@ func (s *bashScan) copyTargets(name string, args []word) {
 			// install -d はディレクトリを作るだけである。
 			return
 		}
-		if text == "-t" && index+1 < len(args) {
+		switch {
+		case (text == "-t" || text == "--target-directory") && index+1 < len(args):
 			directory = &args[index+1]
-		}
-		if value, ok := strings.CutPrefix(text, "--target-directory="); ok {
-			directory = &word{text: value, dynamic: args[index].dynamic}
+		case strings.HasPrefix(text, "--target-directory="):
+			directory = &word{text: text[len("--target-directory="):], dynamic: args[index].dynamic}
+		case strings.HasPrefix(text, "-t") && len(text) > 2:
+			directory = &word{text: text[2:], dynamic: args[index].dynamic}
 		}
 	}
 	files := operands(args, valued)
@@ -417,7 +593,9 @@ func (s *bashScan) copyTargets(name string, args []word) {
 		files = files[:len(files)-1]
 		resolved := s.resolve(destination)
 		if len(resolved) != 1 || !isDir(resolved[0]) {
-			s.add(resolved...)
+			for _, path := range resolved {
+				s.addCopy(path, s.sources(files))
+			}
 			return
 		}
 		directory = &destination
@@ -428,9 +606,22 @@ func (s *bashScan) copyTargets(name string, args []word) {
 	}
 	for _, file := range files {
 		if !file.dynamic {
-			s.add(filepath.Join(resolved[0], filepath.Base(file.text)))
+			s.addCopy(filepath.Join(resolved[0], filepath.Base(file.text)), s.sources([]word{file}))
 		}
 	}
+}
+
+// sources はコピーの送り元を解決する。静的に決まらない送り元があれば、空の送り元（生成ファイルとみなさない）を返す。
+func (s *bashScan) sources(files []word) []string {
+	var out []string
+	for _, file := range files {
+		resolved := s.resolve(file)
+		if len(resolved) == 0 {
+			return []string{""}
+		}
+		out = append(out, resolved...)
+	}
+	return out
 }
 
 // --- パッチ -------------------------------------------------------------------
@@ -766,7 +957,7 @@ func (s *bashScan) inlineCode(kind string, c *command, args []word) bool {
 	stdin := false
 	for index := 1; index < len(args); index++ {
 		text := args[index].text
-		if options.code[text] {
+		if options.code[text] || pythonCodeCluster(kind, text) {
 			if index+1 < len(args) {
 				code = append(code, args[index+1].text)
 			}
@@ -800,12 +991,23 @@ func (s *bashScan) inlineCode(kind string, c *command, args []word) bool {
 	return true
 }
 
+// pythonCodeCluster は -c で終わる短いオプションのまとまり（-Bc）で、次の引数がコードになる形かを返す。
+func pythonCodeCluster(kind, text string) bool {
+	return kind == "python" && len(text) > 2 && strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") &&
+		strings.HasSuffix(text, "c") && strings.Trim(text[1:len(text)-1], "bBdEhiIOPqsSuv") == ""
+}
+
 // attachedCode は -c'...'・--eval=... のように値をくっつけたコードのオプションを読む。
 func attachedCode(kind, text string) (string, bool) {
 	switch kind {
 	case "python":
-		if strings.HasPrefix(text, "-c") && len(text) > 2 {
-			return text[2:], true
+		// -c の前に値を取らない短いオプションをまとめた形（-Bc）も読む。
+		if !strings.HasPrefix(text, "-") || strings.HasPrefix(text, "--") {
+			break
+		}
+		index := strings.IndexByte(text, 'c')
+		if index > 0 && index < len(text)-1 && strings.Trim(text[1:index], "bBdEhiIOPqsSuv") == "" {
+			return text[index+1:], true
 		}
 	case "node":
 		for _, prefix := range []string{"--eval=", "--print="} {
@@ -826,7 +1028,8 @@ var (
 	// Perl の '>'・'>>'・'+<'）と、ファイルへ書き込む関数を拾う。open の括弧の中は 1 段の入れ子まで見る。
 	writeAPIRE = regexp.MustCompile(`open\w*\s*\((?:[^()]|\([^()]*\))*?` +
 		`(?:['"][rbtU]*[wax+][rbtU+]*['"]|['"](?:>>?|\+[<>]))` +
-		`|write_text|write_bytes|\.write\s*\(|writeFile|appendFile|createWriteStream|File\.write` +
+		`|\bopen\s*\(?\s*(?:my\s+)?[$\w]+\s*,\s*['"](?:>>?|\+[<>])` +
+		`|write_text|write_bytes|\.write\s*\(|writeFile|appendFile|createWriteStream|renameSync|File\.write` +
 		`|shutil\.(?:copy\w*|move)|copyFile|os\.(?:rename|replace)`)
 	// literalRE はコードの中の文字列リテラル（' " ` で囲んだもの）である。
 	literalRE = regexp.MustCompile("'([^'\\\\\n]*)'|\"([^\"\\\\\n]*)\"|`([^`\\\\\n$]*)`")
@@ -841,6 +1044,8 @@ func (s *bashScan) codeTargets(code string) {
 	}
 	for _, match := range literalRE.FindAllStringSubmatch(code, -1) {
 		for _, literal := range match[1:] {
+			// Perl の 2 引数の open（">gen.go"）は、モードの記号を除いたものをパスとみなす。
+			literal = strings.TrimLeft(literal, "+<> ")
 			if literal == "" || len(literal) > 1024 || strings.Contains(literal, "://") || !pathLikeRE.MatchString(literal) {
 				continue
 			}
@@ -857,6 +1062,11 @@ func (s *bashScan) shellScript(c *command, args []word, depth int) {
 	script := ""
 	for index := 1; index < len(args); index++ {
 		text := args[index].text
+		if text == "-o" || text == "-O" || text == "+o" || text == "+O" {
+			// set -o と shopt の値（pipefail・extglob）を読み飛ばす。
+			index++
+			continue
+		}
 		if strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "--") && strings.Contains(text, "c") {
 			if index+1 < len(args) {
 				script = args[index+1].text
@@ -894,15 +1104,20 @@ func (s *bashScan) declaration(args []word) {
 	if err != nil {
 		return
 	}
-	var paths []string
+	var paths, unresolved []string
 	for _, index := range indexes {
-		for _, path := range s.resolve(args[2+index]) {
+		arg := args[2+index]
+		if arg.dynamic {
+			unresolved = append(unresolved, arg.text)
+			continue
+		}
+		for _, path := range s.resolve(arg) {
 			if !slices.Contains(paths, path) {
 				paths = append(paths, path)
 			}
 		}
 	}
-	if len(paths) > 0 {
-		s.declarations = append(s.declarations, declared{reason: reason, paths: paths})
+	if len(paths) > 0 || len(unresolved) > 0 {
+		s.declarations = append(s.declarations, declared{reason: reason, paths: paths, unresolved: unresolved})
 	}
 }

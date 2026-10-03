@@ -11,7 +11,8 @@ import (
 )
 
 // runAllowGeneratedEdit は、ユーザーが指示した生成ファイルの手編集の宣言を受ける。
-// 記録するのは generated-edit-guard（PreToolUse で session_id を受け取れるのは hook だけ）で、CLI は形を確かめて結果を示すだけである。
+// 記録するのは generated-edit-guard（session_id を受け取れるのは hook だけ）で、このコマンドが成功した後の PostToolUse で行う。
+// CLI は形を確かめて結果を示すだけである。
 func runAllowGeneratedEdit(args []string, stdout, stderr io.Writer) int {
 	language := displayLanguage()
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {

@@ -43,6 +43,7 @@ func newFixture(t *testing.T) *fixture {
 		"infrastructure/l10n/translation.go": l10nHeader,
 		"sub/gen.go":                         standardHeader,
 		"plain.go":                           "package acme\n",
+		"draft/gen.go":                       "package acme\n",
 		"tmp.go":                             "package acme\n",
 		"scripts/gen.py":                     "print('generate')\n",
 	}
@@ -74,6 +75,31 @@ func (f *fixture) payload(session, toolName string, toolInput any) string {
 
 func (f *fixture) bash(session, command string) string {
 	return f.payload(session, "Bash", map[string]any{"command": command})
+}
+
+// ran は Bash の command を実行し終えた PostToolUse の payload を作る。response は tool_response である。
+func (f *fixture) ran(session, command string, response any) string {
+	data, err := json.Marshal(map[string]any{
+		"session_id":      session,
+		"hook_event_name": "PostToolUse",
+		"tool_name":       "Bash",
+		"tool_input":      map[string]any{"command": command},
+		"tool_response":   response,
+		"cwd":             f.dir,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+// succeeded は成功した Bash の tool_response である。
+var succeeded = map[string]any{"stdout": "declared", "stderr": "", "interrupted": false}
+
+// declared は宣言を実行し終えたときの注入を返す。
+func (f *fixture) declared(t *testing.T, session, command string, options hooktest.Options) string {
+	t.Helper()
+	return expectEvent(t, "PostToolUse", f.ran(session, command, succeeded), options)
 }
 
 // invoke は payload で起動し、判定を返す。出力が注入なら、判断のフィールドが無いことを確かめて Injection も返す。
@@ -109,8 +135,13 @@ func expectSilent(t *testing.T, raw string, options hooktest.Options) {
 
 func expectInjection(t *testing.T, raw string, options hooktest.Options) string {
 	t.Helper()
+	return expectEvent(t, "PreToolUse", raw, options)
+}
+
+func expectEvent(t *testing.T, event, raw string, options hooktest.Options) string {
+	t.Helper()
 	result, injection := invoke(t, raw, options)
-	if result.Decision != "" || injection.Event != "PreToolUse" || injection.Context == "" {
+	if result.Decision != "" || injection.Event != event || injection.Context == "" {
 		t.Fatalf("want an injection without a decision, got decision=%q injection=%+v (reason %q)",
 			result.Decision, injection, result.Reason)
 	}
@@ -232,8 +263,28 @@ func TestBashWritesAreDenied(t *testing.T) {
 		{Command: "tee -a gen.go < /dev/null"},
 		{Command: "mv tmp.go gen.go"},
 		{Command: "cp -f tmp.go gen.go"},
-		{Command: "cp gen.go sub/"},
-		{Command: "cp -t sub gen.go"},
+		{Command: "cp draft/gen.go sub/"},
+		{Command: "cp -t sub draft/gen.go"},
+		{Command: "cp -tsub draft/gen.go"},
+		{Command: "cp --target-directory sub draft/gen.go"},
+		{Command: "cp --target-directory=sub draft/gen.go"},
+		{Command: "cp tmp.go gen.go.tmp && mv gen.go.tmp gen.go"},
+		{Command: "go run ./cmd/gen > gen.go.tmp && mv gen.go.tmp gen.go && echo x >> gen.go"},
+		{Command: "cp $X gen.go"},
+		{Command: "sed -i s/a/b/ sub/{gen,plain}.go"},
+		{Command: "sed -i s/a/b/ {sub,draft}/gen.go"},
+		{Command: "perl -pe s/a/b/ -i gen.go"},
+		{Command: "bash -o pipefail -c 'echo x > gen.go'"},
+		{Command: "bash -O extglob -c 'echo x > gen.go'"},
+		{Command: "sed -I '' s/a/b/ gen.go"},
+		{Command: "ruby -pi -e 'sub(/a/, \"b\")' gen.go"},
+		{Command: "gawk -i inplace '{print}' gen.go"},
+		{Command: "awk -i inplace -v x=1 -f prog.awk gen.go"},
+		{Command: "perl -e 'open my $f, \">\", \"gen.go\"; print $f 1'"},
+		{Command: "perl -e 'open(F, \">gen.go\"); print F 1'"},
+		{Command: "python3 -Bc \"open('gen.go','w').write('x')\""},
+		{Command: "python3 -Bc\"open('gen.go','w').write('x')\""},
+		{Command: "node -e \"require('fs').renameSync('tmp.go', 'gen.go')\""},
 		{Command: "install -m 644 tmp.go gen.go"},
 		{Command: "truncate -s 0 gen.go"},
 		{Command: "dd if=/dev/zero of=gen.go bs=1 count=1"},
@@ -320,6 +371,15 @@ func TestBashReadsAndRegenerationPass(t *testing.T) {
 		"go run ./cmd/gen > gen.go",
 		"./gen.sh > gen.go",
 		"git show HEAD:gen.go > gen.go",
+		"cp gen.go sub/",
+		"cp -t sub gen.go",
+		"cp gen.go sub/gen.go",
+		"go run ./cmd/gen > gen.go.tmp && mv gen.go.tmp gen.go",
+		"mockgen -source=acme.go > "+other+"/m.go && cp "+other+"/m.go x_mock.go",
+		"patch --dry-run gen.go < /dev/null",
+		"patch -C -p1 < /dev/null",
+		"sed -i s/a/b/ sub/{plain,new}.go",
+		"awk '{print}' gen.go",
 		"make build &> gen.go",
 		"python3 -m acme.gen",
 		"python3 -c \"print(open('gen.go').read())\"",
@@ -369,7 +429,7 @@ func declare(paths string) string {
 func TestDeclarationAllowsEditsInTheSameSession(t *testing.T) {
 	f := newFixture(t)
 	language := hooktest.Language
-	declared := expectInjection(t, f.bash("session-a", declare("gen.go")), hooktest.Options{})
+	declared := f.declared(t, "session-a", declare("gen.go"), hooktest.Options{})
 	if want := messages.T(language, idContextDeclared); !strings.Contains(declared, want) {
 		t.Errorf("context %q does not contain %q", declared, want)
 	}
@@ -404,7 +464,7 @@ func TestDeclarationAllowsEditsInTheSameSession(t *testing.T) {
 
 func TestDeclarationReportMentionsGeneratorCommand(t *testing.T) {
 	f := newFixture(t)
-	declared := expectInjection(t, f.bash("s", declare("infrastructure/l10n/resource_ja.go")), withL10n())
+	declared := f.declared(t, "s", declare("infrastructure/l10n/resource_ja.go"), withL10n())
 	if !strings.Contains(declared, "`make l10n`") {
 		t.Errorf("context %q does not name the generator command", declared)
 	}
@@ -414,15 +474,48 @@ func TestDeclarationReportMentionsGeneratorCommand(t *testing.T) {
 	}
 }
 
-func TestDeclarationAndWriteInOneCommand(t *testing.T) {
+// TestDeclarationIsRecordedAfterItRuns は、宣言を実行に成功した後（PostToolUse）にだけ記録することを固定する。
+// 実行前（PreToolUse）には記録しないので、宣言と書き込みを同じコマンドにしても書き込みは止まる。
+func TestDeclarationIsRecordedAfterItRuns(t *testing.T) {
 	f := newFixture(t)
-	context := expectInjection(t, f.bash("s", declare(f.path("gen.go"))+" && echo x >> gen.go"), hooktest.Options{})
-	language := hooktest.Language
-	for _, id := range []string{idContextDeclared, idContextAllowed} {
-		if want := messages.T(language, id); !strings.Contains(context, want) {
-			t.Errorf("context %q does not contain %q", context, want)
-		}
+	combined := declare(f.path("gen.go")) + " && echo x >> gen.go"
+	expectDeny(t, f.bash("s", combined), hooktest.Options{})
+	expectDeny(t, f.bash("s", "echo x >> gen.go"), hooktest.Options{})
+	// 失敗した宣言と、利用者が拒んで実行されなかった宣言（PostToolUse が来ない）は記録しない。
+	for _, response := range []any{
+		map[string]any{"stdout": "", "stderr": "usage", "exit_code": 2},
+		map[string]any{"interrupted": true},
+		map[string]any{"success": false},
+	} {
+		expectSilent(t, f.ran("s", declare("gen.go"), response), hooktest.Options{})
 	}
+	expectDeny(t, f.bash("s", "echo x >> gen.go"), hooktest.Options{})
+	context := f.declared(t, "s", combined, hooktest.Options{})
+	if want := messages.T(hooktest.Language, idContextDeclared); !strings.Contains(context, want) {
+		t.Errorf("context %q does not contain %q", context, want)
+	}
+	expectInjection(t, f.bash("s", "echo x >> gen.go"), hooktest.Options{})
+	// tool_response が無い・読めない PostToolUse は成功として扱う（失敗を別のイベントにしない CLI に備えた判定と同じ）。
+	expectEvent(t, "PostToolUse", f.ran("s2", declare("gen.go"), nil), hooktest.Options{})
+	// PostToolUse では書き込みを判定しない。
+	expectSilent(t, f.ran("s3", "echo x >> gen.go", succeeded), hooktest.Options{})
+}
+
+func TestDeclarationWithUnresolvedPaths(t *testing.T) {
+	f := newFixture(t)
+	context := f.declared(t, "s", declare("$FILE gen.go"), hooktest.Options{})
+	notice := messages.Text(hooktest.Language, idContextUnrecorded, map[string]any{"Paths": "$FILE"})
+	if !strings.Contains(context, notice) || !strings.Contains(context, messages.T(hooktest.Language, idContextDeclared)) {
+		t.Errorf("context %q must report the unrecorded path and the recorded one", context)
+	}
+	only := f.declared(t, "s2", declare("\"$(pwd)/gen.go\""), hooktest.Options{})
+	if strings.Contains(only, messages.T(hooktest.Language, idContextDeclared)) {
+		t.Errorf("nothing was recorded, but the context says so: %q", only)
+	}
+	expectDeny(t, f.payload("s2", "Edit", map[string]any{"file_path": f.path("gen.go")}), hooktest.Options{})
+	// ブレース展開したパスは記録する。
+	f.declared(t, "s3", declare("{gen,x_mock}.go"), hooktest.Options{})
+	expectInjection(t, f.payload("s3", "Edit", map[string]any{"file_path": f.path("x_mock.go")}), hooktest.Options{})
 }
 
 func TestDeclarationAcceptsAnyPathAndSymlinks(t *testing.T) {
@@ -431,10 +524,10 @@ func TestDeclarationAcceptsAnyPathAndSymlinks(t *testing.T) {
 	if err := os.Symlink(f.path("gen.go"), link); err != nil {
 		t.Fatal(err)
 	}
-	expectInjection(t, f.bash("s", declare("link.go")), hooktest.Options{})
+	f.declared(t, "s", declare("link.go"), hooktest.Options{})
 	expectInjection(t, f.payload("s", "Edit", map[string]any{"file_path": f.path("gen.go")}), hooktest.Options{})
 	// 生成ファイルでないパスの宣言も記録し、受け付けたことを伝える（編集は元から止めない）。
-	expectInjection(t, f.bash("s", declare("plain.go")), hooktest.Options{})
+	f.declared(t, "s", declare("plain.go"), hooktest.Options{})
 }
 
 func TestMalformedDeclarationIsNotRecorded(t *testing.T) {
@@ -444,17 +537,16 @@ func TestMalformedDeclarationIsNotRecorded(t *testing.T) {
 		"hhx " + DeclareCommand + " --reason '' gen.go",
 		"hhx " + DeclareCommand + " --reason 'x'",
 		"hhx " + DeclareCommand + " --force --reason x gen.go",
-		"hhx " + DeclareCommand + " --reason x $FILE",
 		"echo hhx " + DeclareCommand + " --reason x gen.go",
 	} {
-		expectSilent(t, f.bash("s", command), hooktest.Options{})
+		expectSilent(t, f.ran("s", command, succeeded), hooktest.Options{})
 	}
 	expectDeny(t, f.payload("s", "Edit", map[string]any{"file_path": f.path("gen.go")}), hooktest.Options{})
 }
 
 func TestDeclarationWithoutSessionIsNotRecorded(t *testing.T) {
 	f := newFixture(t)
-	expectSilent(t, f.bash("", declare("gen.go")), hooktest.Options{})
+	expectSilent(t, f.ran("", declare("gen.go"), succeeded), hooktest.Options{})
 	expectDeny(t, f.payload("", "Edit", map[string]any{"file_path": f.path("gen.go")}), hooktest.Options{})
 }
 
@@ -471,7 +563,7 @@ func TestDeclarationPrunesOldSessions(t *testing.T) {
 	if err := os.Chtimes(st.sessionDir("old"), old, old); err != nil {
 		t.Fatal(err)
 	}
-	expectInjection(t, f.bash("new", declare("gen.go")), hooktest.Options{})
+	f.declared(t, "new", declare("gen.go"), hooktest.Options{})
 	if _, err := os.Stat(st.sessionDir("old")); !os.IsNotExist(err) {
 		t.Errorf("the expired session must be removed: %v", err)
 	}

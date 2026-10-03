@@ -9,8 +9,10 @@
 //   - 判定は deny だけで、ask は返さない（自律開発が主な用途で、Codex は ask を解釈しない）。理由文は生成コマンドでの作り直しへ誘導し、
 //     ユーザーへの確認は促さない。
 //   - ユーザーが会話の中で明示的に指示したときだけ、エージェントが `hhx allow-generated-edit` で宣言し、hook がそれを payload の
-//     session_id ごとに記録して、同じセッションの宣言したパスへの編集を通す。宣言を受け付けたときと、宣言で編集を通すたびに、
+//     session_id ごとに記録して、同じセッションの宣言したパスへの編集を通す。記録は PostToolUse で、実行に成功した宣言だけを扱う
+//     （利用者が実行を拒んだ宣言や、実行されなかった分岐の宣言を残さない）。宣言を受け付けたときと、宣言で編集を通すたびに、
 //     最終報告に載せる内容を判断のフィールドを持たない additionalContext で注入する。
+//   - cp・mv・install の送り元がすべて生成ファイルか、同じコマンドで生成器が出力したファイルなら、作り直した結果を置く形として通す。
 //
 // Codex の PreToolUse には exec_command の workdir が渡らず、payload の cwd はセッション開始時のディレクトリのままである。
 // Bash の相対パスは、コマンドの中の cd を辿って解決する。デバッグ経路では、引数が JSON の object なら payload として、
@@ -27,6 +29,7 @@ import (
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
+	"github.com/HappyOnigiri/hhx/internal/toolresponse"
 )
 
 // Name は hook の名前である。
@@ -46,6 +49,9 @@ func Definition() hookrt.Definition {
 			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "Bash", AdditionalContextLimit: contextLimit},
 			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "^(apply_patch|Edit|Write)$",
 				AdditionalContextLimit: contextLimit},
+			// 宣言は実行に成功した後に記録する（利用者が実行を拒んだ宣言や、失敗した宣言を残さないため）。
+			{Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash"},
+			{Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", AdditionalContextLimit: contextLimit},
 		},
 		Gate:        gate,
 		Run:         run,
@@ -67,7 +73,7 @@ var gateKeywords = [][]byte{
 	[]byte(">"), []byte("\\u003e"), []byte("sed"), []byte("perl"), []byte("tee"), []byte("sponge"),
 	[]byte("cp"), []byte("mv"),
 	[]byte("install"), []byte("truncate"), []byte("of="), []byte("patch"), []byte("apply"), []byte("python"),
-	[]byte("pypy"), []byte("node"), []byte("ruby"), []byte(DeclareCommand), []byte("file_path"),
+	[]byte("pypy"), []byte("node"), []byte("ruby"), []byte("inplace"), []byte(DeclareCommand), []byte("file_path"),
 	[]byte("notebook_path"), []byte("File:"),
 }
 
@@ -87,39 +93,45 @@ var now = time.Now
 type request struct {
 	session string
 	cwd     string
+	// event は hook_event_name で、PostToolUse のときは宣言だけを扱う。
+	event string
+	// succeeded は PostToolUse の tool_response が成功を示すかである。
+	succeeded bool
 	// paths は書き込み先の候補（絶対パス）である。
-	paths        []string
-	declarations []declared
+	paths []string
+	// scan は Bash のコマンドの走査の結果で、Bash でなければ nil である。
+	scan *bashScan
 }
 
 func run(c *hookrt.Context) error {
 	req, ok := readRequest(c)
-	if !ok || (len(req.paths) == 0 && len(req.declarations) == 0) {
+	if !ok {
 		return nil
 	}
 	var settings Settings
 	// 設定の型が違っても（install が報告する）、標準のマーカーで判定は続ける。
 	_ = c.Settings(&settings)
 	markers := newMarkerSet(settings.Markers)
-
 	st, storeErr := openStore()
 	usable := storeErr == nil && req.session != ""
-	var notes []reportItem
-	for _, declaration := range req.declarations {
-		if !usable || st.save(req.session, declaration.reason, declaration.paths, now()) != nil {
-			continue
+	if req.event == "PostToolUse" {
+		if req.scan != nil && req.succeeded && usable {
+			recordDeclarations(c, st, req, markers)
 		}
-		for _, path := range declaration.paths {
-			found, _ := markers.detect(path)
-			notes = append(notes, reportItem{path: path, reason: declaration.reason, command: found.command})
-		}
+		return nil
 	}
-
+	if len(req.paths) == 0 {
+		return nil
+	}
+	isGenerated := func(path string) bool {
+		_, ok := markers.detect(path)
+		return ok
+	}
 	var blocked []generated
 	var allowed []reportItem
 	for _, path := range req.paths {
 		found, ok := markers.detect(path)
-		if !ok {
+		if !ok || (req.scan != nil && req.scan.copiedFromGenerated(path, isGenerated)) {
 			continue
 		}
 		if usable {
@@ -134,10 +146,43 @@ func run(c *hookrt.Context) error {
 	switch {
 	case len(blocked) > 0:
 		c.Deny(denyReason(language, blocked, req.cwd))
-	case len(notes) > 0 || len(allowed) > 0:
-		c.AddContext("PreToolUse", reportContext(language, notes, allowed, req.cwd))
+	case len(allowed) > 0:
+		c.AddContext("PreToolUse", reportContext(language, nil, allowed, req.cwd))
 	}
 	return nil
+}
+
+// recordDeclarations は成功した Bash の宣言を記録し、受け付けたことと最終報告の指示を注入する。
+// 記録できなかったパス（変数を含むもの）があれば、リテラルで宣言し直すよう伝える。
+func recordDeclarations(c *hookrt.Context, st store, req request, markers markerSet) {
+	var notes []reportItem
+	var unresolved []string
+	for _, declaration := range req.scan.declarations {
+		unresolved = append(unresolved, declaration.unresolved...)
+		if len(declaration.paths) == 0 || st.save(req.session, declaration.reason, declaration.paths, now()) != nil {
+			continue
+		}
+		for _, path := range declaration.paths {
+			found, _ := markers.detect(path)
+			notes = append(notes, reportItem{path: path, reason: declaration.reason, command: found.command})
+		}
+	}
+	language := c.Language()
+	var parts []string
+	if len(unresolved) > 0 {
+		parts = append(parts, unrecordedNotice(language, unresolved))
+	}
+	if len(notes) > 0 {
+		parts = append(parts, reportContext(language, notes, nil, req.cwd))
+	}
+	text := strings.Join(parts, "\n")
+	if len(text) > contextLimit {
+		// 両方を合わせて Codex の上限を超えるなら、最終報告の指示を優先する。
+		text = parts[len(parts)-1]
+	}
+	if text != "" {
+		c.AddContext("PostToolUse", text)
+	}
 }
 
 // readRequest は payload（デバッグ経路ではコマンド文字列も）から判定の材料を読む。判定しない入力なら ok は偽になる。
@@ -153,11 +198,22 @@ func readRequest(c *hookrt.Context) (request, bool) {
 			return request{}, false
 		}
 		scan := scanBash(string(c.Input), cwd)
-		return request{cwd: cwd, paths: scan.paths, declarations: scan.declarations}, true
+		return request{cwd: cwd, paths: scan.paths, scan: scan}, true
 	}
 	var req request
 	var toolName string
 	_ = json.Unmarshal(payload["tool_name"], &toolName)
+	_ = json.Unmarshal(payload["hook_event_name"], &req.event)
+	if req.event == "PostToolUse" {
+		if !bytes.Contains(c.Input, []byte(DeclareCommand)) {
+			return request{}, false
+		}
+		decoder := json.NewDecoder(bytes.NewReader(payload["tool_response"]))
+		decoder.UseNumber()
+		var response any
+		_ = decoder.Decode(&response)
+		req.succeeded = toolresponse.Succeeded(response)
+	}
 	_ = json.Unmarshal(payload["session_id"], &req.session)
 	_ = json.Unmarshal(payload["cwd"], &req.cwd)
 	if req.cwd == "" || !filepath.IsAbs(req.cwd) {
@@ -204,8 +260,8 @@ func readRequest(c *hookrt.Context) (request, bool) {
 		if command == "" {
 			return request{}, false
 		}
-		scan := scanBash(command, req.cwd)
-		req.paths, req.declarations = scan.paths, scan.declarations
+		req.scan = scanBash(command, req.cwd)
+		req.paths = req.scan.paths
 	}
 	return req, true
 }

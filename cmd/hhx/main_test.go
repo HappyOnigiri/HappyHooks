@@ -161,7 +161,8 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	claude := strings.Join([]string{
-		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=15 statusMessage=Checking PR body freshness...",
+		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=15 statusMessage=Checking PR body freshness..., " +
+			"generated-edit-guard",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
 			"forbidden-term-guard, idle-wait-guard, generated-edit-guard",
 		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard, generated-edit-guard",
@@ -173,7 +174,8 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 	}
 	codex := strings.Join([]string{
 		"PostToolUse [Bash] push-ci-context timeout=10 additionalContextLimit=4096, " +
-			"pr-body-staleness timeout=15 statusMessage=Checking PR body freshness... additionalContextLimit=4096",
+			"pr-body-staleness timeout=15 statusMessage=Checking PR body freshness... additionalContextLimit=4096, " +
+			"generated-edit-guard additionalContextLimit=4096",
 		"PreToolUse [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard, " +
 			"generated-edit-guard additionalContextLimit=4096",

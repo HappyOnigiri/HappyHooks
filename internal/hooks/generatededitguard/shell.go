@@ -17,6 +17,8 @@ type word struct {
 	glob bool
 	// tilde はクォートの外の ~ で始まることを示す（シェルがホームへ展開する）。
 	tilde bool
+	// brace はクォートの外に { があることを示す（ブレース展開の候補）。
+	brace bool
 }
 
 // redirect はリダイレクト 1 つである。
@@ -280,6 +282,9 @@ func (p *parser) readWord() word {
 			}
 			if c == '*' || c == '?' || c == '[' {
 				w.glob = true
+			}
+			if c == '{' {
+				w.brace = true
 			}
 			text.WriteByte(c)
 			p.pos++

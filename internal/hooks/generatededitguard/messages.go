@@ -33,6 +33,8 @@ const (
 	idContextAllowed = "generated-edit-guard.context.allowed"
 	// 最終報告に、編集した生成ファイル・理由とユーザーの指示・作り直しが要ることの 3 点を必ず載せるよう命じる。
 	idContextReport = "generated-edit-guard.context.report"
+	// 変数などで値が決まらず記録できなかった宣言のパスを伝え、リテラルで宣言し直すよう促す。
+	idContextUnrecorded = "generated-edit-guard.context.unrecorded"
 	// 生成コマンドが読めないときに、コマンドの代わりに置く語。
 	idUnknownCommand = "generated-edit-guard.unknown-command"
 	// 一覧の上限を超えた分を件数だけにした部分。
@@ -101,6 +103,12 @@ var messages = i18n.Register(i18n.Catalog{
 			"- 手で編集した生成ファイル: {{.Files}}\n" +
 			"- 編集した理由とユーザーの指示: {{.Reasons}}\n" +
 			"- 生成コマンド（{{.Commands}}）で作り直す必要があること。生成元に同じ変更を入れない限り、作り直すと手編集は上書きされる。",
+	},
+	idContextUnrecorded: {
+		EN: "generated-edit-guard did not record these declared paths because their values are not fixed in the " +
+			"command (variables or command substitution): {{.Paths}}. Declare them again with literal paths.",
+		JA: "generated-edit-guard は、コマンドの中で値が決まらない（変数やコマンド置換を含む）ため、次の宣言のパスを記録しなかった: " +
+			"{{.Paths}}。パスをそのまま書いて宣言し直す。",
 	},
 	idUnknownCommand: {
 		EN: "the generator named in the file's marker",
@@ -177,6 +185,15 @@ func denyReason(language i18n.Language, blocked []generated, cwd string) string 
 		"Why":    messages.Text(language, idWhy, map[string]any{"Markers": listed(language, unique(markers), maxListed)}),
 		"How":    how,
 	})
+}
+
+// unrecordedNotice は記録できなかった宣言のパスを伝える文面を組み立てる。
+func unrecordedNotice(language i18n.Language, paths []string) string {
+	var shown []string
+	for _, path := range unique(paths) {
+		shown = append(shown, truncate(path, maxPathRunes, true))
+	}
+	return messages.Text(language, idContextUnrecorded, map[string]any{"Paths": listed(language, shown, maxListed)})
 }
 
 // reportItem は最終報告に載せる生成ファイル 1 つである。

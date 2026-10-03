@@ -137,12 +137,14 @@ var messages = i18n.Register(i18n.Catalog{
 	// 宣言の使い方。ユーザーの明示的な指示があるときだけ使うことと、記録は hook が行うことを伝える。
 	idAllowUsage: {
 		EN: "Usage: hhx allow-generated-edit --reason <the user's instruction> <path>...\n\n" +
-			"Declare that the user explicitly told the agent to hand-edit these generated files. generated-edit-guard " +
-			"records the declaration for the agent session when it sees this command, and allows edits of the paths " +
-			"for the rest of the session. Run it only on the user's explicit instruction.\n",
+			"Declare that the user explicitly told the agent to hand-edit these generated files. After this command " +
+			"succeeds, generated-edit-guard records the declaration for the agent session and allows edits of the " +
+			"paths for the rest of the session. Write the paths literally (no variables). " +
+			"Run it only on the user's explicit instruction.\n",
 		JA: "使い方: hhx allow-generated-edit --reason <ユーザーの指示> <path>...\n\n" +
-			"ユーザーが生成ファイルの手編集を明示的に指示したことを宣言する。generated-edit-guard がこのコマンドを見つけて" +
-			"エージェントのセッションに記録し、そのセッションの間は指定したパスの編集を通す。ユーザーの明示的な指示があるときだけ実行する。\n",
+			"ユーザーが生成ファイルの手編集を明示的に指示したことを宣言する。このコマンドが成功すると generated-edit-guard が" +
+			"エージェントのセッションに記録し、そのセッションの間は指定したパスの編集を通す。パスは変数を使わずにそのまま書く。" +
+			"ユーザーの明示的な指示があるときだけ実行する。\n",
 	},
 	idAllowNoReason: {
 		EN: "hhx allow-generated-edit: --reason is required (summarize the user's instruction)",
@@ -159,11 +161,11 @@ var messages = i18n.Register(i18n.Catalog{
 	// 宣言を受け付けた。最終報告に載せる 3 点をエージェントに念押しする。
 	idAllowDeclared: {
 		EN: "Declared hand edits of generated files: {{.Paths}}\n" +
-			"generated-edit-guard recorded this for the current agent session. In the final report, list the files, " +
-			"the reason and the user's instruction, and that the files must be regenerated.\n",
+			"generated-edit-guard records this for the current agent session once the command finishes. In the final " +
+			"report, list the files, the reason and the user's instruction, and that the files must be regenerated.\n",
 		JA: "生成ファイルの手編集を宣言した: {{.Paths}}\n" +
-			"generated-edit-guard が現在のエージェントのセッションに記録した。最終報告に、ファイル・理由とユーザーの指示・" +
-			"作り直しが必要なことを書く。\n",
+			"このコマンドが終わると generated-edit-guard が現在のエージェントのセッションに記録する。最終報告に、ファイル・" +
+			"理由とユーザーの指示・作り直しが必要なことを書く。\n",
 	},
 	idAllowDisabled: {
 		EN: "generated-edit-guard is disabled, so generated files are not blocked and no declaration is needed.\n",
