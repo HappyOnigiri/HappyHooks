@@ -58,6 +58,30 @@ hooks:
 
 変更に再インストールは不要です。リポジトリごとの禁止語リストは[forbidden-term-guard の設定](docs/forbidden-terms.md)を参照してください。
 
+現在使われる設定値と出所は、次のコマンドで確認できます。
+
+```sh
+hhx config show
+hhx config show pr-merge-guard
+hhx config show --json
+```
+
+既定値を含む全 hook の有効・無効、値の出所、対象エージェントと hook 固有の設定を表示します。
+`HHX_CONFIG` が設定されている場合は、そのファイルを読み、出力に指定元を示します。
+設定ファイルがなければ既定値を表示します。
+有効・無効は hhx の設定上の状態で、エージェントへの登録や Codex の信頼状態は確認しません。
+禁止語リストなどのリポジトリ別設定や、セッションの一時的な状態も対象外です。
+
+JSON では `path`、`path_source`、`exists`、`language` と `hooks` を返します。
+値の出所は `default` / `config`、パスの指定元は `default` / `HHX_CONFIG` です。
+`hooks[].settings` は固有設定がある hook だけに付き、各項目を `value` と `source` で示します。
+`markers` は追加マーカーだけで、Go の標準マーカーは常に使用します。
+キーと状態の値は表示言語によらず固定し、更新案内の文面は表示言語に従います。
+
+正常終了は `0`、不正な設定・読み込み失敗は `1`、不正な引数は `2` です。
+構文・型・表示言語・hook 名・追加マーカーの正規表現を検査し、不正な場合は一覧を出さずにエラーを報告します。
+設定の確認は読み取り専用で、再インストールやネットワーク通信は行いません。
+
 ## コントリビュート
 
 コントリビュートを歓迎します。バグ報告や提案は [Issues](https://github.com/HappyOnigiri/HappyHooks/issues) に、変更は [プルリクエスト](https://github.com/HappyOnigiri/HappyHooks/pulls) でお寄せください。文書や翻訳の改善も歓迎します。
