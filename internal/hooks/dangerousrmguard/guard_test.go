@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
 )
@@ -618,23 +617,51 @@ func TestLongCommandIsHandled(t *testing.T) {
 	check(t, hooktest.Deny, hooktest.Commands("echo "+padding+"; rm -rf $D/*"))
 }
 
-// 病的に長い入力でも括弧の潰し込みが破綻しない。
-func TestPathologicalInputIsFast(t *testing.T) {
-	cases := []string{
-		"rm -rf $D/* " + strings.Repeat("2>/dev/null ", 2000),
-		"rm -rf " + strings.Repeat("$D/x ", 2000) + "$D/*",
-		"echo " + strings.Repeat("()", 2000) + "; rm -rf $D/*",
-		"echo " + strings.Repeat("(", 2000) + strings.Repeat(")", 2000) + "; rm -rf x",
-		"echo " + strings.Repeat("`x` ", 2000) + "; rm -rf x",
-		"rm -rf " + strings.Repeat("a/", 2000) + "*",
-		"echo " + strings.Repeat("$(", 2000) + strings.Repeat(")", 2000) + "; rm -rf x",
+// pathologicalInputs は機能テストとベンチマークで同じ長い入力を使う。
+func pathologicalInputs() []struct {
+	name    string
+	command string
+	want    string
+	label   string
+} {
+	return []struct {
+		name    string
+		command string
+		want    string
+		label   string
+	}{
+		{"redirects", "rm -rf $D/* " + strings.Repeat("2>/dev/null ", 2000), hooktest.Deny, labelEmptyVar},
+		{"variable_paths", "rm -rf " + strings.Repeat("$D/x ", 2000) + "$D/*", hooktest.Deny, labelEmptyVar},
+		{"adjacent_parens", "echo " + strings.Repeat("()", 2000) + "; rm -rf $D/*", hooktest.Deny, labelEmptyVar},
+		{"nested_parens", "echo " + strings.Repeat("(", 2000) + strings.Repeat(")", 2000) + "; rm -rf x", "", ""},
+		{"backticks", "echo " + strings.Repeat("`x` ", 2000) + "; rm -rf x", hooktest.Deny, labelTooMany},
+		{"deep_path", "rm -rf " + strings.Repeat("a/", 2000) + "*", "", ""},
+		{"nested_substitutions", "echo " + strings.Repeat("$(", 2000) + strings.Repeat(")", 2000) + "; rm -rf x", hooktest.Deny, labelTooMany},
 	}
-	start := time.Now()
-	for _, command := range cases {
-		hooktest.Stdin(t, Definition(), hooktest.BashPayload(command, "/tmp", nil))
+}
+
+// 病的に長い入力でも判定と理由を保つ。共有 CI の負荷や race・coverage の計測で変わる実時間は合否に使わない。
+func TestPathologicalInput(t *testing.T) {
+	for _, tc := range pathologicalInputs() {
+		t.Run(tc.name, func(t *testing.T) {
+			check(t, tc.want, []hooktest.Case{{Command: tc.command, Label: tc.label}})
+		})
 	}
-	if elapsed := time.Since(start); elapsed > 20*time.Second {
-		t.Errorf("took %v", elapsed)
+}
+
+// 処理時間は通常テストから分け、入力ごとに測定できるようにする。
+func BenchmarkPathologicalInput(b *testing.B) {
+	for _, tc := range pathologicalInputs() {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.command)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := evaluate(tc.command, "/tmp"); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
