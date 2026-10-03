@@ -285,6 +285,24 @@ func TestCriticalHomeThroughSymlink(t *testing.T) {
 	check(t, "", hooktest.Commands("rm -rf "+realPath+"/x"))
 }
 
+// 実在しないリンク先を使い、OS の /private 配下の構成に依存せず別名との照合を検証する。
+func TestCriticalHomeThroughPrivateAlias(t *testing.T) {
+	for _, directory := range []string{"tmp", "var", "etc", "home"} {
+		t.Run(directory, func(t *testing.T) {
+			realPath := "/private/" + directory + "/hhx-test/real-home"
+			aliasPath := "/" + directory + "/hhx-test/real-home"
+			link := filepath.Join(t.TempDir(), "home")
+			if err := os.Symlink(realPath, link); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", link+"/")
+			check(t, hooktest.Deny, denyAll(labelCritical,
+				"rm -rf "+realPath, "rm -rf "+aliasPath, "rm -rf "+link, "rm -rf ~", "rm -rf $HOME/"))
+			check(t, "", hooktest.Commands("rm -rf "+realPath+"/x", "rm -rf "+aliasPath+"/x"))
+		})
+	}
+}
+
 // --- 作業ディレクトリとその祖先（組み込みの MF） ---
 
 func TestWorkspace(t *testing.T) {

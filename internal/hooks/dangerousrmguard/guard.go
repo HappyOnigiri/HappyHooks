@@ -301,7 +301,8 @@ func isCriticalPath(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	canonical := trimTrailingSlash(slashesRE.ReplaceAllString(resolvedHome, "/"))
+	// 移植元と異なり、ホームの実体にも対象と同じ別名処理を適用し、/private 経由の削除を見逃さない。
+	canonical := trimTrailingSlash(alias(slashesRE.ReplaceAllString(resolvedHome, "/")))
 	if canonical != home && py.Lower(target) == py.Lower(canonical) {
 		return true, nil
 	}

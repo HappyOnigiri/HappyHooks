@@ -99,7 +99,8 @@ hooks:
 		t.Fatal(markers)
 	}
 	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
-		configFixture(t, "language: "+string(language)+"\n")
+		// 既定値に依存せず、有効・無効の両方の表示を検証する。
+		configFixture(t, "language: "+string(language)+"\nhooks:\n  pr-merge-guard:\n    enabled: false\n")
 		code, stdout, stderr := runCommand(t, "", "config", "show")
 		if code != 0 || stderr != "" {
 			t.Fatalf("code=%d stderr=%q", code, stderr)
