@@ -24,7 +24,7 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 | [`generated-edit-guard`](docs/hooks/generated-edit-guard.ja.md) | 自動生成ファイルの手編集を止める | 有効 |
 | [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.ja.md) | Claude Code の確認待ちになる危険な `rm` を先に止める | 有効（Claude Code） |
 | [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.ja.md) | バックグラウンドのエージェントが終わるまでプランモードを維持する | 有効（Claude Code） |
-| [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.ja.md) | Git の hook 設定の変更を止める | 無効 |
+| [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.ja.md) | Git の hook 設定の変更を止める | 有効 |
 | [`pr-context`](docs/hooks/pr-context.ja.md) | プロンプト中の PR の情報を注入する | 有効 |
 | [`push-ci-context`](docs/hooks/push-ci-context.ja.md) | push 後に CI の待ち方を案内する | 有効 |
 | [`pr-body-staleness`](docs/hooks/pr-body-staleness.ja.md) | PR の本文が古い可能性を知らせる | 有効 |
@@ -57,6 +57,30 @@ hooks:
 ```
 
 変更に再インストールは不要です。リポジトリごとの禁止語リストは[forbidden-term-guard の設定](docs/forbidden-terms.md)を参照してください。
+
+現在使われる設定値と出所は、次のコマンドで確認できます。
+
+```sh
+hhx config show
+hhx config show pr-merge-guard
+hhx config show --json
+```
+
+既定値を含む全 hook の有効・無効、値の出所、対象エージェントと hook 固有の設定を表示します。
+`HHX_CONFIG` が設定されている場合は、そのファイルを読み、出力に指定元を示します。
+設定ファイルがなければ既定値を表示します。
+有効・無効は hhx の設定上の状態で、エージェントへの登録や Codex の信頼状態は確認しません。
+禁止語リストなどのリポジトリ別設定や、セッションの一時的な状態も対象外です。
+
+JSON では `path`、`path_source`、`exists`、`language` と `hooks` を返します。
+値の出所は `default` / `config`、パスの指定元は `default` / `HHX_CONFIG` です。
+`hooks[].settings` は固有設定がある hook だけに付き、各項目を `value` と `source` で示します。
+`markers` は追加マーカーだけで、Go の標準マーカーは常に使用します。
+キーと状態の値は表示言語によらず固定し、更新案内の文面は表示言語に従います。
+
+正常終了は `0`、不正な設定・読み込み失敗は `1`、不正な引数は `2` です。
+構文・型・表示言語・hook 名・追加マーカーの正規表現を検査し、不正な場合は一覧を出さずにエラーを報告します。
+設定の確認は読み取り専用で、再インストールやネットワーク通信は行いません。
 
 ## コントリビュート
 

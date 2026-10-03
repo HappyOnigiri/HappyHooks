@@ -28,6 +28,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runHook(args[1:], stdin, stdout, stderr)
 	case "install":
 		return runInstall(args[1:], stdout, stderr)
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr)
 	case "wait-ci":

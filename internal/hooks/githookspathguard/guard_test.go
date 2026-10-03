@@ -11,7 +11,7 @@ import (
 // keyName はテストに書くキーの表記である。本体は大文字小文字を区別しない。
 const keyName = "core.hooksPath"
 
-// enabled はこの hook を有効にする設定である。既定では無効なので、判定のテストはすべてこれで起動する。
+// enabled はこの hook を明示的に有効にする設定である。
 const enabled = "hooks:\n  git-hookspath-guard:\n    enabled: true\n"
 
 func runRaw(t *testing.T, raw string) hooktest.Result {
@@ -38,17 +38,17 @@ func fileToolPayload(toolName, filePath string) string {
 	return hooktest.ToolPayload(toolName, map[string]any{"file_path": filePath, "content": "[core]\n\tbare = false\n"}, "/tmp/repo")
 }
 
-func TestDisabledByDefault(t *testing.T) {
+func TestEnabledByDefault(t *testing.T) {
 	for _, raw := range []string{
 		hooktest.BashPayload("git config "+keyName+" hooks", "/tmp/repo", nil),
 		fileToolPayload("Write", "/tmp/repo/.git/config"),
 	} {
-		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != "" {
-			t.Errorf("default must be disabled: %+v", got)
+		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != hooktest.Deny {
+			t.Errorf("default must be enabled: %+v", got)
 		}
 	}
-	if got := hooktest.Argv(t, Definition(), "git config "+keyName+" hooks"); got.Decision != "" {
-		t.Errorf("argv path must also be disabled by default: %+v", got)
+	if got := hooktest.Argv(t, Definition(), "git config "+keyName+" hooks"); got.Decision != hooktest.Deny {
+		t.Errorf("argv path must also be enabled by default: %+v", got)
 	}
 	explicit := hooktest.Run(t, Definition(), hooktest.BashPayload("git config "+keyName+" hooks", "/tmp/repo", nil),
 		hooktest.Options{Config: "hooks:\n  git-hookspath-guard:\n    enabled: false\n"})

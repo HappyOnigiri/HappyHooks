@@ -2,15 +2,15 @@
 
 English | [日本語](git-hookspath-guard.ja.md) · [Hooks](../../README.md#hooks)
 
-**Default:** Off for Claude Code and Codex.
+**Default:** On for Claude Code and Codex.
 
 For setups that delegate global Git hooks to repository hooks, this guard blocks changes to `core.hooksPath` and direct
 edits to Git configuration files such as `.git/config`. Reading Git configuration is allowed.
 
-Enable it in `~/.config/hhx/config.yaml`:
+Disable it in `~/.config/hhx/config.yaml`:
 
 ```yaml
 hooks:
   git-hookspath-guard:
-    enabled: true
+    enabled: false
 ```

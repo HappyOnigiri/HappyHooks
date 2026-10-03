@@ -123,16 +123,21 @@ func run(c *hookrt.Context) error {
 	// 設定の型が違っても（install が報告する）、既定の文面で注意は出す。
 	_ = c.Settings(&settings)
 	language := c.Language()
-	instruction := messages.T(language, idDefaultInstruction)
-	if custom := strings.TrimSpace(settings.UpdateInstruction); custom != "" {
-		instruction = terminated(language, custom)
-	}
+	instruction := settings.Instruction(language)
 	text, err := message(language, pullRequest, headlines, instruction)
 	if err != nil {
 		return err
 	}
 	c.AddContext(event, text)
 	return nil
+}
+
+// Instruction は hook と設定の表示が同じ更新案内を使うための解決済みの文面である。
+func (s Settings) Instruction(language i18n.Language) string {
+	if custom := strings.TrimSpace(s.UpdateInstruction); custom != "" {
+		return terminated(language, custom)
+	}
+	return messages.T(language, idDefaultInstruction)
 }
 
 // read は判定の材料を読む。event が PostToolUse でなければ何もしない。

@@ -70,6 +70,46 @@ const (
 )
 
 var messages = i18n.Register(i18n.Catalog{
+	// 設定表示の構文を示す。
+	idConfigUsage: {EN: "Usage: hhx config show [hook] [--json]\n", JA: "使い方: hhx config show [hook] [--json]\n"},
+	// 機械向けの出力を選ぶ。
+	idConfigJSONFlag: {EN: "print JSON", JA: "JSON で表示する"},
+	// ヘルプを表示する。
+	idConfigHelpFlag: {EN: "show usage", JA: "使い方を表示する"},
+	// 個別指定の綴りの誤りを報告する。
+	idConfigUnknownHook: {EN: "hhx config show: unknown hook {{.Hook}}", JA: "hhx config show: 未知の hook {{.Hook}}"},
+	// 値の明示指定を示す。
+	idConfigFileSource: {EN: "config file", JA: "設定ファイル"},
+	// 未指定の値の出所を示す。
+	idConfigDefaultSource: {EN: "default", JA: "既定値"},
+	// 読み込み成功を示す。
+	idConfigLoaded: {EN: "success", JA: "成功"},
+	// ファイルがない場合の既定値使用を示す。
+	idConfigMissing: {EN: "not created; using defaults", JA: "未作成・既定値を使用"},
+	// 設定の場所と言語を示す。
+	idConfigHeader: {
+		EN: "Config file: {{.Path}} ({{.PathSource}})\nLoad: {{.Status}}\nLanguage: {{.Language}} ({{.LanguageSource}})\n\n",
+		JA: "設定ファイル: {{.Path}}（{{.PathSource}}）\n読み込み: {{.Status}}\n表示言語: {{.Language}}（{{.LanguageSource}}）\n\n",
+	},
+	// 一覧の列の意味を示す。
+	idConfigColumns: {EN: "HOOK\tSTATE\tSOURCE\tAGENTS", JA: "HOOK\t有効・無効\t出所\t対象"},
+	// 設定上の有効を示す。
+	idConfigEnabled: {EN: "enabled", JA: "有効"},
+	// 設定上の無効を示す。
+	idConfigDisabled: {EN: "disabled", JA: "無効"},
+	// 登録・信頼状態とは異なることを明示する。
+	idConfigScope: {
+		EN: "\nState reflects hhx configuration; agent registration and trust are not checked.\n",
+		JA: "\n有効・無効は hhx の設定上の状態です。エージェントへの登録と信頼状態は確認していません。\n",
+	},
+	// 固有設定をまとめる。
+	idConfigSettings: {EN: "\nHook settings:\n", JA: "\nhook 固有の設定:\n"},
+	// markers は追加分だけであることを示す。
+	idConfigStandardMarker: {
+		EN: "      The standard Go generated-code marker is always used.\n",
+		JA: "      Go の標準の生成マーカーは常に使用します。\n",
+	},
+
 	idUsage: {
 		EN: `Usage:
   hhx hook <name> [input]   Run a hook (invoked by Claude Code / Codex)
@@ -82,6 +122,8 @@ var messages = i18n.Register(i18n.Catalog{
   hhx allow-generated-edit --reason <text> <path>...
                             Declare a user-instructed hand edit of generated files
   hhx update [--apply]      Check GitHub Releases for a newer hhx (and install it)
+  hhx config show [hook] [--json]
+                            Show effective settings and their sources
   hhx version               Print the version
 `,
 		JA: `使い方:
@@ -95,6 +137,8 @@ var messages = i18n.Register(i18n.Catalog{
   hhx allow-generated-edit --reason <text> <path>...
                             ユーザーが指示した生成ファイルの手編集を宣言する
   hhx update [--apply]      GitHub Releases で新しい hhx を確かめる（--apply で入れる）
+  hhx config show [hook] [--json]
+                            現在の設定値と出所を表示する
   hhx version               版を表示する
 `,
 	},
@@ -275,7 +319,7 @@ var messages = i18n.Register(i18n.Catalog{
 	idConflicting: {EN: "this PR conflicts with the base branch", JA: "この PR は base ブランチとコンフリクトしている"},
 })
 
-// displayLanguage は CLI の表示言語を設定から決める。設定が読めなければ英語にする（誤りは install が報告する）。
+// displayLanguage は CLI の表示言語を設定から決める。設定が読めなければ英語にする（誤りは install と config show が報告する）。
 func displayLanguage() i18n.Language {
 	path, err := config.DefaultPath()
 	if err != nil {
@@ -287,3 +331,21 @@ func displayLanguage() i18n.Language {
 	}
 	return cfg.DisplayLanguage()
 }
+
+const (
+	idConfigUsage          = "cli.config.usage"
+	idConfigJSONFlag       = "cli.config.json-flag"
+	idConfigHelpFlag       = "cli.config.help-flag"
+	idConfigUnknownHook    = "cli.config.unknown-hook"
+	idConfigFileSource     = "cli.config.file-source"
+	idConfigDefaultSource  = "cli.config.default-source"
+	idConfigLoaded         = "cli.config.loaded"
+	idConfigMissing        = "cli.config.missing"
+	idConfigHeader         = "cli.config.header"
+	idConfigColumns        = "cli.config.columns"
+	idConfigEnabled        = "cli.config.enabled"
+	idConfigDisabled       = "cli.config.disabled"
+	idConfigScope          = "cli.config.scope"
+	idConfigSettings       = "cli.config.settings"
+	idConfigStandardMarker = "cli.config.standard-marker"
+)

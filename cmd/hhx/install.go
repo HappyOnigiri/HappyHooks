@@ -186,6 +186,11 @@ func validateConfig(definitions []hookrt.Definition) error {
 	if err != nil {
 		return err
 	}
+	return validateLoadedConfig(path, cfg, definitions)
+}
+
+// validateLoadedConfig は CLI が読み込んだ設定を、再読み込みせずに検査する。
+func validateLoadedConfig(path string, cfg *config.Config, definitions []hookrt.Definition) error {
 	if _, err := i18n.Parse(cfg.Language); err != nil {
 		return &messageError{id: idInvalidLanguage, data: map[string]any{
 			"Path": path, "Value": strconv.Quote(cfg.Language),
