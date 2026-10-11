@@ -655,6 +655,11 @@ func pathologicalInputs() []struct {
 		{"backticks", "echo " + strings.Repeat("`x` ", 2000) + "; rm -rf x", hooktest.Deny, labelTooMany},
 		{"deep_path", "rm -rf " + strings.Repeat("a/", 2000) + "*", "", ""},
 		{"nested_substitutions", "echo " + strings.Repeat("$(", 2000) + strings.Repeat(")", 2000) + "; rm -rf x", hooktest.Deny, labelTooMany},
+		// shell -c の分岐。外側の cd の有無を shell -c ごとに調べ直すと、入力の長さの 2 乗になる。
+		{"inline_many_shells", strings.Repeat("bash -c 'x=1; $X'; ", 3000), "", ""},
+		{"inline_long_script", "bash -c '" + strings.Repeat("$X; ", 5000) + "'", hooktest.Deny, labelInlineUnchecked},
+		{"inline_many_positional", "bash -c 'echo " + strings.Repeat("$1", 900) + "' _ a", "", ""},
+		{"inline_many_braces", "bash -c 'echo " + strings.Repeat("{a,$b}", 5000) + "'", "", ""},
 	}
 }
 
@@ -675,7 +680,7 @@ func BenchmarkPathologicalInput(b *testing.B) {
 			b.SetBytes(int64(len(tc.command)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := evaluate(tc.command, "/tmp"); err != nil {
+				if _, err := evaluateAt(tc.command, "/tmp", 0); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -696,5 +701,134 @@ func TestDisabledByConfig(t *testing.T) {
 		hooktest.Options{Config: "hooks:\n  dangerous-rm-guard:\n    enabled: false\n"})
 	if got.Decision != "" {
 		t.Fatalf("disabled hook must stay silent: %+v", got)
+	}
+}
+
+// --- shell -c のスクリプト（Claude Code v2.1.296 の Fcn / Lwe / HTr） ---
+
+var (
+	labelInlineUnchecked = messages.T(hooktest.Language, idInlineUnchecked)
+	labelInlineValue     = commandLabel(idInlineValue)
+)
+
+// 調査のきっかけになった実物（rubocop を変更行に絞って流すスクリプト）。パスとハッシュは架空の値に置き換えた。
+// sed の `\{0,1\}` が括弧展開に見えて検査できず、`direnv exec "$WT"` の `$WT` がコマンドの位置にあるので ask になる。
+const inlineRealWorld = `bash -c '
+WT=$PWD; S=/tmp/scratchpad; CHANGED_RB=$(awk "{print \$2}" $S/files.txt | grep -E "\.(rb|schema)$|^Gemfile$"); mb=abc123; CL=$S/changed-lines.txt; : > $CL
+for f in $CHANGED_RB; do [ -f "$f" ] || continue; r=$(git diff --unified=0 $mb HEAD -- "$f" | grep "^@@" | sed -n "s/.*+\([0-9]*\),\{0,1\}\([0-9]*\).*/\1 \2/p" | while read a c; do c=${c:-1}; [ "$c" -eq 0 ] && continue; echo "$a-$((a+c-1))"; done | paste -sd "," -); [ -n "$r" ] && echo "$f:$r" >> $CL; done
+cat $CL
+direnv exec "$WT" env RUBOCOP_LOCAL_CHANGED_LINES="$CL" bundle exec rubocop --cache false --format json $CHANGED_RB > $S/cop.json 2>$S/cop.err; echo rc=$?
+jq -r ".summary" $S/cop.json'`
+
+func TestInlineShellUnchecked(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelInlineUnchecked,
+		inlineRealWorld,
+		// rm の語が無くても止める（一次ゲートを rm 以外でも通す）。
+		`bash -c 'sed -n "s/a\{0,1\}/b/p" f; exec "$DIR" ls'`,
+		`sh -c 'alias ll=ls; "$RUN" go'`,
+		`bash -lc 'echo {x,$y}; $CMD x'`,
+		`cd /tmp && bash -c 'IFS=:; $X'`,
+		`/bin/bash -c 'echo {x,$y}; sudo $CMD'`,
+		`bash-5.2 -c 'echo {x,$y}; $CMD'`,
+		`bash --norc -c 'echo {x,$y}; $CMD'`,
+		`bash --foo -c 'echo hi; $CMD'`,
+		`busybox sh -c 'echo {x,$y}; $CMD'`,
+		`zsh -c 'echo ${x:h}; $CMD'`,
+		// 位置引数で意味が変わる形（クォートの外の $@ に複数の値）。
+		`bash -c 'echo $@; $CMD' _ a b`,
+		// wrapper を外してからシェルを探す。
+		`timeout 10 env A=1 bash -c 'echo {x,$y}; $CMD'`,
+		`sudo -u bob nice -n 5 bash -c 'echo {x,$y}; $CMD'`,
+		`A=1 time bash -c 'echo {x,$y}; $CMD'`,
+		`echo start; bash -c 'echo {x,$y}; $CMD' 2>/dev/null | tail -1`,
+		`if true; then bash -c 'echo {x,$y}; $CMD'; fi`,
+		// 2000 文字を超えるスクリプトは検査されない。
+		"bash -c 'echo "+strings.Repeat("x", 2000)+"; $CMD'",
+		// rm を括弧展開や代入で作る形。
+		`bash -c 'echo {x,$y}; /bin/{rm,ls} x'`,
+		`bash -c 'echo {x,$y}; env R=/bin/rm x'`,
+		// 括弧で区切られた後ろの変数もコマンドの位置とみなす（クォートを無視した読み方）。
+		`bash -c 'echo {x,$y} $X'`,
+	))
+	// 理由文は「包まずに直接実行する」を案内する。
+	reason := reasonOf(t, inlineRealWorld, "/tmp")
+	if !strings.Contains(reason, messages.T(hooktest.Language, idWhyInlineUnchecked)) ||
+		!strings.Contains(reason, messages.Text(hooktest.Language, idHowInlineUnchecked,
+			map[string]any{"NoAsk": messages.T(hooktest.Language, idNoAsk)})) {
+		t.Errorf("inline unchecked reason: %q", reason)
+	}
+}
+
+func TestInlineShellAllowed(t *testing.T) {
+	check(t, "", hooktest.Commands(
+		`bash -c 'echo hi'`,
+		`bash -c 'echo $1' _ "$(pwd)"`,
+		// 検査できないが、rm になりうる語がコマンドの位置に無い。
+		`bash -c 'sed -n "s/a\{0,1\}/b/p" f'`,
+		`bash -c 'echo {x,$y} done'`,
+		// 検査できるので、組み込みは中身を再帰的に調べて通す。
+		`bash -c 'x=1; $X'`,
+		`bash -c 'exec "$DIR" ls'`,
+		// シェルの -c ではない。
+		`bash script.sh`,
+		`bash -c`,
+		`python -c 'import os; os.system("$X")'`,
+		`fish -c 'echo {x,$y}; $CMD'`,
+		// xargs などの後ろのスクリプトは見ない（組み込みより狭い側）。
+		`xargs bash -c 'echo {x,$y}; $CMD'`,
+		// クォートが閉じない入力は判定しない。
+		`bash -c 'echo {x,$y}; $CMD`,
+		// 案内した書き直し先: 包まずに直接実行する。
+		`S=/tmp/scratchpad; for f in $(cat $S/files.txt); do sed -n "s/.*+\([0-9]*\),\{0,1\}.*/\1/p" "$f"; done`,
+		`direnv exec "$PWD" env X=1 bundle exec rubocop --format json`,
+		// 案内した書き直し先: リテラルのパスを引数に渡す。
+		`bash -c 'rm -rf "$1"/build' _ /tmp/work`,
+		// heredoc の本文はコマンドではない（スクリプトを書き出すだけ）。
+		"cat > /tmp/x.sh <<'EOF'\nbash -c 'echo {x,$y}; $CMD'\nEOF",
+		"cat <<-EOF > /tmp/x.sh\n\tbash -c 'echo {x,$y}; $CMD'\nEOF",
+	))
+	// here-string は heredoc ではないので、同じ行の shell -c は判定する。
+	check(t, hooktest.Deny, denyAll(labelInlineUnchecked, `cat <<< x; bash -c 'echo {x,$y}; $CMD'`))
+}
+
+func TestInlineShellRemovalTarget(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelInlineValue,
+		`bash -c 'rm -rf $1/*' _ "$(pwd)"`,
+		`sh -c 'rm -rf "$1"/' _ "$DIR"`,
+		`bash -c 'rm -rf $2/*' _ a "$X"`,
+	))
+	// 置き換え先の名前は見せず、${…} で表す。
+	reason := reasonOf(t, `bash -c 'rm -rf $1/*' _ "$(pwd)"`, "/tmp")
+	if strings.Contains(reason, inlineShellValue) || !strings.Contains(reason, "${…}/*") {
+		t.Errorf("inline value reason must show ${…}: %q", reason)
+	}
+	// 位置引数を使わない危険な rm は、中身の判定の理由文のまま出す。
+	check(t, hooktest.Deny, denyAll(labelEmptyVar, `bash -c 'rm -rf $BASE/*'`, `bash -c 'echo x; rm -rf "$BASE/$name"'`))
+	check(t, hooktest.Deny, denyAll(labelCritical, `bash -c 'rm -rf "$1"' _ /`))
+	// 外側に cd があると、スクリプトの中の相対パスの基準が分からないので再帰しない。
+	check(t, "", hooktest.Commands(`cd sub && bash -c 'rm -rf "$1"' _ .`))
+}
+
+func TestInlineShellDisabledByEnvironment(t *testing.T) {
+	for _, value := range []string{"1", "true", " YES ", "on"} {
+		t.Setenv(disableInlineEnv, value)
+		check(t, "", hooktest.Commands(inlineRealWorld, `bash -c 'rm -rf $1/*' _ "$(pwd)"`))
+		// rm の分岐は環境変数と関係なく止める。
+		check(t, hooktest.Deny, hooktest.Commands(`rm -rf $BASE/*`))
+	}
+	// 組み込みが真と読まない値では、組み込みも ask を出すので止める。
+	for _, value := range []string{"0", "false", "no", ""} {
+		t.Setenv(disableInlineEnv, value)
+		check(t, hooktest.Deny, denyAll(labelInlineUnchecked, inlineRealWorld))
+	}
+}
+
+func TestInlineShellGate(t *testing.T) {
+	for input, want := range map[string]bool{
+		`bash -c 'x'`: true, `sh -ec x`: true, `zsh -lc x`: true, `bash script.sh`: false, `echo -c`: false,
+	} {
+		if got := gate([]byte(input)); got != want {
+			t.Errorf("gate(%q)=%v, want %v", input, got, want)
+		}
 	}
 }

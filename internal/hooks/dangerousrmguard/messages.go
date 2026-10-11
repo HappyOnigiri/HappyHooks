@@ -15,38 +15,44 @@ const (
 	idReason = "dangerous-rm-guard.reason"
 	idNoAsk  = "dangerous-rm-guard.no-ask"
 
-	idHowEmptyVar   = "dangerous-rm-guard.how.empty-variable"
-	idHowDerived    = "dangerous-rm-guard.how.derived-variable"
-	idHowCD         = "dangerous-rm-guard.how.cd"
-	idHowShape      = "dangerous-rm-guard.how.shape"
-	idHowGlob       = "dangerous-rm-guard.how.glob"
-	idHowCmdsub     = "dangerous-rm-guard.how.substitution"
-	idHowTooMany    = "dangerous-rm-guard.how.too-many-substitutions"
-	idHowCritical   = "dangerous-rm-guard.how.critical"
-	idHowAncestor   = "dangerous-rm-guard.how.ancestor"
-	idHowCWDItself  = "dangerous-rm-guard.how.cwd"
-	idHowCmdsubGlob = "dangerous-rm-guard.how.substitution-glob"
+	idHowEmptyVar        = "dangerous-rm-guard.how.empty-variable"
+	idHowDerived         = "dangerous-rm-guard.how.derived-variable"
+	idHowCD              = "dangerous-rm-guard.how.cd"
+	idHowShape           = "dangerous-rm-guard.how.shape"
+	idHowGlob            = "dangerous-rm-guard.how.glob"
+	idHowCmdsub          = "dangerous-rm-guard.how.substitution"
+	idHowTooMany         = "dangerous-rm-guard.how.too-many-substitutions"
+	idHowCritical        = "dangerous-rm-guard.how.critical"
+	idHowAncestor        = "dangerous-rm-guard.how.ancestor"
+	idHowCWDItself       = "dangerous-rm-guard.how.cwd"
+	idHowCmdsubGlob      = "dangerous-rm-guard.how.substitution-glob"
+	idHowInlineUnchecked = "dangerous-rm-guard.how.inline-shell-unchecked"
+	idHowInlineValue     = "dangerous-rm-guard.how.inline-shell-value"
 
-	idWhyEmptyVar   = "dangerous-rm-guard.why.empty-variable"
-	idWhyDerived    = "dangerous-rm-guard.why.derived-variable"
-	idWhyCmdsub     = "dangerous-rm-guard.why.substitution"
-	idWhyTooMany    = "dangerous-rm-guard.why.too-many-substitutions"
-	idWhyCD         = "dangerous-rm-guard.why.cd"
-	idWhyShape      = "dangerous-rm-guard.why.shape"
-	idWhyGlob       = "dangerous-rm-guard.why.glob"
-	idWhyCmdsubGlob = "dangerous-rm-guard.why.substitution-glob"
-	idWhyCritical   = "dangerous-rm-guard.why.critical"
-	idWhyCWD        = "dangerous-rm-guard.why.cwd"
-	idWhyAncestor   = "dangerous-rm-guard.why.ancestor"
+	idWhyEmptyVar        = "dangerous-rm-guard.why.empty-variable"
+	idWhyDerived         = "dangerous-rm-guard.why.derived-variable"
+	idWhyCmdsub          = "dangerous-rm-guard.why.substitution"
+	idWhyTooMany         = "dangerous-rm-guard.why.too-many-substitutions"
+	idWhyCD              = "dangerous-rm-guard.why.cd"
+	idWhyShape           = "dangerous-rm-guard.why.shape"
+	idWhyGlob            = "dangerous-rm-guard.why.glob"
+	idWhyCmdsubGlob      = "dangerous-rm-guard.why.substitution-glob"
+	idWhyCritical        = "dangerous-rm-guard.why.critical"
+	idWhyCWD             = "dangerous-rm-guard.why.cwd"
+	idWhyAncestor        = "dangerous-rm-guard.why.ancestor"
+	idWhyInlineUnchecked = "dangerous-rm-guard.why.inline-shell-unchecked"
+	idWhyInlineValue     = "dangerous-rm-guard.why.inline-shell-value"
 
 	// 発火した分岐ごとの対象の表記。テストはこれでどの分岐が発火したかを見る。
-	idUnresolvable = "dangerous-rm-guard.target.unresolvable"
-	idCritical     = "dangerous-rm-guard.target.critical"
-	idCWD          = "dangerous-rm-guard.target.cwd"
-	idAncestor     = "dangerous-rm-guard.target.ancestor"
-	idEmptyVar     = "dangerous-rm-guard.target.empty-variable"
-	idCmdsub       = "dangerous-rm-guard.target.substitution"
-	idTooMany      = "dangerous-rm-guard.target.too-many-substitutions"
+	idUnresolvable    = "dangerous-rm-guard.target.unresolvable"
+	idCritical        = "dangerous-rm-guard.target.critical"
+	idCWD             = "dangerous-rm-guard.target.cwd"
+	idAncestor        = "dangerous-rm-guard.target.ancestor"
+	idEmptyVar        = "dangerous-rm-guard.target.empty-variable"
+	idCmdsub          = "dangerous-rm-guard.target.substitution"
+	idTooMany         = "dangerous-rm-guard.target.too-many-substitutions"
+	idInlineUnchecked = "dangerous-rm-guard.target.inline-shell-unchecked"
+	idInlineValue     = "dangerous-rm-guard.target.inline-shell-value"
 )
 
 var messages = i18n.Register(i18n.Catalog{
@@ -232,6 +238,41 @@ var messages = i18n.Register(i18n.Catalog{
 			"確認ダイアログになるので、迂回になりません。",
 	},
 
+	// REWRITE: 検査できない shell -c のスクリプト。包まずに直接実行させ、ファイルへ移す・文字を挟むなど検査から隠す形を禁じる。
+	idHowInlineUnchecked: {
+		EN: "{{.NoAsk}} Run the commands directly instead of wrapping them in `bash -c '...'`, " +
+			"so that each command is checked on its own.\n" +
+			"  1. Drop the `bash -c` wrapper and run the script's commands as the command itself " +
+			"(split it into several commands if it is long)\n" +
+			"  2. If you need the wrapper, keep the script checkable: no brace patterns such as `{a,b}` or sed's `\\{0,1\\}` " +
+			"(even inside quotes), no `alias` or `IFS`, at most 2000 characters, " +
+			"and no command that starts with a variable (`$CMD args`, `exec \"$DIR\"`)\n" +
+			"Moving the script into a file and running `bash file.sh`, or inserting characters only to dodge the check, " +
+			"is forbidden, because it hides the script from the check without making it any safer.",
+		JA: "{{.NoAsk}}`bash -c '...'` で包まず、コマンドを直接実行して、1 つずつ検査される形にしてください。\n" +
+			"  1. `bash -c` を外し、スクリプトの中のコマンドをそのままコマンドとして実行する" +
+			"（長ければ複数のコマンドに分ける）\n" +
+			"  2. 包む必要があるなら、検査できる形にする: `{a,b}` や sed の `\\{0,1\\}` のような括弧を使わない" +
+			"（クォートの中でも数えられる）、`alias` と `IFS` を使わない、2000 文字以内にする、" +
+			"変数で始まるコマンド（`$CMD args`、`exec \"$DIR\"`）を書かない\n" +
+			"スクリプトをファイルに移して `bash file.sh` で実行する書き方や、検出を外すためだけに文字を挟む書き方は、" +
+			"安全にならないまま検査から隠すだけなので禁止です。",
+	},
+	// REWRITE: shell -c の中の rm の対象が、実行時にしか分からない値から作られている。リテラルか `:?` で守った値にさせる。
+	idHowInlineValue: {
+		EN: "{{.NoAsk}} Make the deletion target known before execution.\n" +
+			"  1. Pass a literal real path as the argument (e.g. `bash -c 'rm -rf \"$1\"/build' _ /tmp/work`), " +
+			"or run the rm directly without `bash -c`\n" +
+			"  2. If the value must come from a variable or a command substitution, check it first and pass the result " +
+			"as a literal path\n" +
+			"Inserting characters only to dodge the check is forbidden, because the danger of an empty value remains.",
+		JA: "{{.NoAsk}}削除対象を実行前に確定する形にしてください。\n" +
+			"  1. 引数にリテラルの実体パスを渡す（例: `bash -c 'rm -rf \"$1\"/build' _ /tmp/work`）か、" +
+			"`bash -c` を使わずに rm を直接実行する\n" +
+			"  2. 値を変数やコマンド置換から得る必要があるなら、先に確認し、その結果をリテラルのパスとして渡す\n" +
+			"検出を外すためだけに文字を挟む書き方は、空の値の危険がそのまま残るので禁止です。",
+	},
+
 	// 以下は各分岐の理由。なぜ静的に安全と判定できないか、または消すと何が起きるかを書く。
 	idWhyEmptyVar: {
 		EN: "The target starts with `$variable/`, so when the variable is undefined or empty the target turns into " +
@@ -304,6 +345,23 @@ var messages = i18n.Register(i18n.Catalog{
 			"実行するとセッションの足元ごと消えます。",
 	},
 
+	idWhyInlineUnchecked: {
+		EN: "Claude Code cannot check this shell -c script statically (brace patterns, `alias`, `IFS`, " +
+			"or a script that is too long), and a word in command position may turn into rm when it runs " +
+			"(a variable at the start of a command, or right after a word such as `exec`, `env`, or `sudo`). " +
+			"Claude Code asks for confirmation for this even in bypass mode.",
+		JA: "このシェルの -c のスクリプトは、Claude Code が静的に検査できません（括弧の展開、`alias`、`IFS`、" +
+			"長すぎるスクリプトなど）。さらに、コマンドの位置にある語が実行時に rm になり得ます" +
+			"（コマンドの先頭や `exec`・`env`・`sudo` などの直後にある変数）。" +
+			"Claude Code は bypass でもこれを確認ダイアログにします。",
+	},
+	idWhyInlineValue: {
+		EN: "The rm target inside the shell -c script is built from an argument or a value known only when it runs. " +
+			"If that value is empty, the rm can reach the root or the home directory.",
+		JA: "シェルの -c のスクリプトの中の rm の対象が、引数や実行時にしか分からない値から作られています。" +
+			"その値が空なら、rm がルートやホームディレクトリに届きます。",
+	},
+
 	// 対象の表記。{{.Command}} は rm か rmdir である。
 	idUnresolvable: {EN: "a deletion target that cannot be resolved statically", JA: "静的に解決できない削除対象"},
 	idCritical:     {EN: "deleting a critical system directory", JA: "システム重要ディレクトリの削除"},
@@ -312,6 +370,14 @@ var messages = i18n.Register(i18n.Catalog{
 	idEmptyVar:     {EN: "{{.Command}} on a variable that may be empty", JA: "空になりうる変数を対象にした {{.Command}}"},
 	idCmdsub:       {EN: "dangerous {{.Command}} inside a command substitution", JA: "コマンド置換の中の危険な {{.Command}}"},
 	idTooMany:      {EN: "a deletion command with too many command substitutions", JA: "コマンド置換が多すぎる削除コマンド"},
+	idInlineUnchecked: {
+		EN: "a shell -c script that may run rm and cannot be checked",
+		JA: "rm を実行し得るのに検査できないシェルの -c のスクリプト",
+	},
+	idInlineValue: {
+		EN: "{{.Command}} in a shell -c script on a value known only when it runs",
+		JA: "シェルの -c のスクリプトの中の、実行時にしか分からない値を対象にした {{.Command}}",
+	},
 })
 
 // finding は発火した分岐である。target・why・how はカタログの ID で、command は rm か rmdir、
