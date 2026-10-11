@@ -10,7 +10,8 @@
 //
 // 方針:
 //   - 基本の判定は Claude Code v2.1.239 の組み込みのロジックを移植した。先行代入から派生した変数の削除は
-//     v2.1.283 の判定を移した。その他の新しい分岐への追従は未確認である。
+//     v2.1.283 の判定を、shell -c のスクリプトの検査は v2.1.296 の判定を移した（ファイル末尾の節）。
+//     その他の新しい分岐への追従は未確認である。
 //   - 理由文は REWRITE と REPORT の 2 系統に分ける（messages.go）。REWRITE の案内には「ガードが働く形」だけを書く。
 //     `"$BASE/x$name"` のように 1 文字挟んで正規表現を外す迂回を案内すると、安全性を上げずに検出だけ消えるので明示的に禁じる。
 //
@@ -23,6 +24,8 @@
 //	on statically-unresolvable target           → REWRITE  (V7r の分岐 A / B / D)
 //	on critical path                            → REPORT   (Kar)
 //	on working directory or its ancestor        → REPORT   (MF。cwd と一致する場合だけ REWRITE)
+//	shell -c script ... could not be checked    → REWRITE  (v2.1.296 の Fcn / Lwe)
+//	in a shell -c script, on a target built ... → REWRITE  (v2.1.296 の HTr。中身は上の各分岐で判定する)
 //
 // 組み込みは "statically-unresolvable" の 3 分岐に別々の理由文を持たせているので、こちらも分けて出す
 // （cd で基準が不定 / 対象の形が上へ広がる / glob が複数階層）。1 本にまとめると、`cd tmp && rm -rf ./*` の正解である
@@ -61,8 +64,11 @@ package dangerousrmguard
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
@@ -84,9 +90,11 @@ func Definition() hookrt.Definition {
 	}
 }
 
-// gate は一次ゲートである。組み込みの検査もすべて rm / rmdir が前提なので、rm を含まない入力は判定しない。
+// gate は一次ゲートである。rm を含む入力と、シェルの -c らしき入力（`sh` と `-…c` の両方を含む）を判定する。
+// 後者は v2.1.296 の shell -c スクリプトの検査が、rm の語の無いスクリプトでも ask を出すためである。
 func gate(input []byte) bool {
-	return strings.Contains(string(input), "rm")
+	text := string(input)
+	return strings.Contains(text, "rm") || (strings.Contains(text, "sh") && inlineGateRE.MatchString(text))
 }
 
 func run(c *hookrt.Context) error {
@@ -101,10 +109,10 @@ func run(c *hookrt.Context) error {
 	if err != nil {
 		return err
 	}
-	if command == "" || !rmWordRE.MatchString(command) {
+	if command == "" {
 		return nil
 	}
-	found, err := evaluate(command, py.Normpath(cwd))
+	found, err := evaluateAt(command, py.Normpath(cwd), 0)
 	if err != nil {
 		return err
 	}
@@ -136,6 +144,16 @@ func payloadFrom(raw []byte) (command, cwd string, err error) {
 	}
 	command, _ = toolInput["command"].(string)
 	return command, cwd, nil
+}
+
+// evaluateAt は depth 段目の shell -c の中のコマンドを判定する。rm の分岐を先に見て、無ければ shell -c の分岐を見る。
+func evaluateAt(command, cwd string, depth int) (finding, error) {
+	if rmWordRE.MatchString(command) {
+		if found, err := evaluate(command, cwd); err != nil || found.target != "" {
+			return found, err
+		}
+	}
+	return findInlineShell(command, cwd, depth)
 }
 
 // evaluate は判定の本体で、拒否するなら発火した分岐（対象の表記・理由・対応のカタログの ID）を返す。
@@ -863,4 +881,762 @@ func classifyProtected(stripped string, bases []string) (kind, candidate string,
 		}
 	}
 	return "", "", nil
+}
+
+// --- Claude Code v2.1.296 の shell -c スクリプトの検査からの移植 ---------------------
+//
+// v2.1.296 は `bash -c '<スクリプト>'` のスクリプトを取り出して（`FTr`）削除を検査する（`Fcn`）。
+//   - スクリプトを静的に検査できず、かつ実行時に rm になりうる語がコマンドの位置にあると、rm の語が無くても ask にする
+//     （`Lwe`。"This command passes a shell -c script that runs rm, and Claude Code could not check the script ..."）。
+//   - 検査できるなら、位置引数を実値か `${__INLINE_SHELL_VALUE__}` に置き換えたスクリプトを再帰的に検査する。
+//     対象が置き換えた値から作られていれば、理由文を「実行時の値を対象にした shell -c の中の rm」に差し替える（`HTr`）。
+//
+// どちらも JS の正規表現で書かれているので、JS の意味（`\s` は Unicode の空白、`\w`・`\d`・`\b` は ASCII、
+// `.` は改行類を除く 1 文字）で移す。py.Space などの Python の文字クラスは使わない。
+//
+// 移植していない条件（組み込みでは ask になり得るが、ここでは通す）:
+//   - tree-sitter に依存する「検査しきれない」の原因（再帰検査での too-complex、検査の予算切れ、`homeWritten`、
+//     スクリプトの中のホームディレクトリのリテラル）と、permission の deny ルールに当たる場合（`Ze`）。
+//   - スクリプトの前に置かれる `cd`・環境変数の受け渡し。外側に cd があるときは再帰検査をしない。
+//   - コマンドの前置きは代表的なもの（時間・優先度・環境・権限の wrapper）だけを外す。`xargs` などの後ろのスクリプトは見ない。
+//
+// 組み込みとずれ得る点: 組み込みはこの検査を機能フラグ（`wX()`。既定で有効、サーバーから無効にできる）でも切り替える。
+// hook からはフラグが見えないので、無効にされた環境ではこちらだけが止める。環境変数 disableInlineEnv は両方を止める。
+
+const (
+	// inlineShellValue は実行時にしか分からない値の置き換え先である（組み込みの `_w`）。
+	inlineShellValue = "__INLINE_SHELL_VALUE__"
+	// inlineShellGuarded は `${1:?}` の形で守られた空の値の置き換え先である。
+	inlineShellGuarded = "${__INLINE_SHELL_GUARDED__:?}"
+	// maxInlineScript を超える長さのスクリプトは検査しない（組み込みの `Qcn`。JS の文字列長で数える）。
+	maxInlineScript = 2000
+	// maxInlineDirectoryChanges を超える数の cd を含むスクリプトは検査しない（組み込みの `LTr`）。
+	maxInlineDirectoryChanges = 8
+	// maxInlineDepth は入れ子の shell -c を検査する深さの上限である（組み込みの `i3e`）。
+	maxInlineDepth = 2
+	// disableInlineEnv は組み込みのこの検査を切る環境変数である。設定されていれば組み込みも ask を出さないので、こちらも止めない。
+	disableInlineEnv = "CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT"
+
+	// jsSpaceChars は JS の `\s` の文字である。
+	jsSpaceChars = `\t\n\v\f\r \x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}`
+	jsSpace      = `[` + jsSpaceChars + `]`
+	jsNotSpace   = `[^` + jsSpaceChars + `]`
+	// jsDot は JS の `.`（改行類を除く 1 文字）である。
+	jsDot = `[^\n\r\x{2028}\x{2029}]`
+	// outerPunctuation は外側のコマンドを単純コマンドに分ける区切りの文字である。
+	outerPunctuation = ";&|()<>\n"
+)
+
+var (
+	// inlineGateRE はシェルの -c らしきオプションである（一次ゲートで使う）。
+	inlineGateRE = regexp.MustCompile(`-[A-Za-z]*c`)
+
+	// u$ の部品。
+	usQuotedRE       = regexp.MustCompile(`\\(?s:.)|'[^']*'|"(?:[^"\\]|\\` + jsDot + `)*"`)
+	usQuotedCharsRE  = regexp.MustCompile(`[` + jsSpaceChars + ";&|()`{}!" + `]`)
+	usDupRE          = regexp.MustCompile(`\d*[<>]&(?:\d+-?|-)`)
+	usRedirectRE     = regexp.MustCompile(`\d*[<>]&|&>>?|>\|`)
+	usStripQuotesRE  = regexp.MustCompile(`\$['"]|['"\\]`)
+	usSplitRE        = regexp.MustCompile("[;&|()`{}\\n!]|\\$\\(")
+	usWordSplitRE    = regexp.MustCompile(`[ \t]+`)
+	usRedirectWordRE = regexp.MustCompile(`^\d*[<>]`)
+	usRedirectOnlyRE = regexp.MustCompile(`^\d*[<>]+$`)
+	usAssignmentRE   = regexp.MustCompile(`^\w+\+?=`)
+
+	// Dwe の部品。
+	removalWordRE   = regexp.MustCompile(`(?i)^(?:\w*=)?rm(?:dir)?$`)
+	removalListRE   = regexp.MustCompile(`(?i)(?:^|,)rm(?:dir)?(?:,|\$)`)
+	removalAssignRE = regexp.MustCompile(`(?i)^\w+=(?:` + jsNotSpace + `*/)?rm(?:dir)?$`)
+	redirectTailRE  = regexp.MustCompile(`(?s)\d*[<>].*$`)
+	findExecRE      = regexp.MustCompile(`^-(?:exec(?:dir)?|ok(?:dir)?)$`)
+	shortFlagsRE    = regexp.MustCompile(`^-[a-zA-Z]+$`)
+
+	// Zcn・NTr・efn の部品。
+	zcnRE         = regexp.MustCompile(`(?:[^` + jsSpaceChars + `'"\\]|\\(?s:.)|'[^']*'|"(?:[^"\\]|\\` + jsDot + `)*")+`)
+	braceSplitRE  = regexp.MustCompile(`,|\.\.`)
+	braceShapeRE  = regexp.MustCompile(`(?s)^([^{]*)\{([^{}]*)\}(.*)$`)
+	braceVarRE    = regexp.MustCompile(`\$\{[^{}]*\}`)
+	braceHeadRE   = regexp.MustCompile(`^["']?[/~$]|[{},\\'"]|\.\.`)
+	braceTailRE   = regexp.MustCompile(`[~{},\\'"]`)
+	braceItemRE   = regexp.MustCompile(`[/~$*?\[]|^\.\.?$|\brm`)
+	braceEmptyRE  = regexp.MustCompile(`[$]|^["']?/`)
+	quoteCharsRE  = regexp.MustCompile(`["'\\]`)
+	removalPathRE = regexp.MustCompile(`(?i)(?:^|/)rm(?:dir)?$`)
+
+	// FTr の部品。
+	aliasRE   = regexp.MustCompile(`\balias\b`)
+	ifsRE     = regexp.MustCompile(`\bIFS\b`)
+	ifsReadRE = regexp.MustCompile(`(?:^|[;&|\n({]` + jsSpace + `*)(?:(?:do|then|else|elif|if|while|until)` + jsSpace +
+		`+)?IFS=(?:'[^']*'|"[^"]*"|[^` + jsSpaceChars + `;&|'"\\])*[ \t]+read\b`)
+	// 移植元の `=(?!=)\S` は「= の後が = でない空白以外の 1 文字」なので、否定の文字クラスに展開した。
+	zshRE = regexp.MustCompile(`(?:^|[` + jsSpaceChars + `;&|(){}])=[^=` + jsSpaceChars +
+		`]|\$\{?\w+\}?(?::[htrelquQxsaAcP&]|\[)|\bargv\b|\$(?:[=~^]|\{[=~^(])|\(:`)
+	positionalUseRE  = regexp.MustCompile(`\$(?:\{[!#@*0-9]|[#@*0-9])`)
+	positionalLookRE = regexp.MustCompile("^(?:[0-9]+(?:\\}|:?\\?[^}$`]*\\})|[@*#]\\})")
+	positionalRE     = regexp.MustCompile(`\\(?s:.)|"\$\{?@\}?"|\$\{([0-9]+)(:?)\?[^}]*\}|` +
+		`\$(?:\{([0-9]+|[@*#])\}|([0-9@*#]))`)
+	escapeRE       = regexp.MustCompile(`\\(?s:.)`)
+	literalArgRE   = regexp.MustCompile(`^[\w./@%+=:,*?[\]!^{} \t\n-]*$`)
+	tildeRE        = regexp.MustCompile(`^~(?:/|$)`)
+	shellVersionRE = regexp.MustCompile(`-\d+(?:\.\d+)*$`)
+	shellBashRE    = regexp.MustCompile(`^(?:r?ba)?sh$`)
+	shellKshRE     = regexp.MustCompile(`ksh$`)
+	shellLongRE    = regexp.MustCompile(`^--?(?:login|posix|noprofile|norc|noediting|verbose|restricted|debugger|` +
+		`dump-(?:po-)?strings|wordexp|pretty-print|help|version|(rcfile|init-file))$`)
+	shellOptionRE    = regexp.MustCompile(`^[-+].`)
+	shellBadFlagsRE  = regexp.MustCompile(`[^abcefhiklmnoprstuvxBCDEHIOPT]`)
+	shellKshFlagRE   = regexp.MustCompile(`[oO].`)
+	shellOptionArgRE = regexp.MustCompile(`[oO]`)
+	shellCommandFlag = regexp.MustCompile(`^-[A-Za-z]*c`)
+
+	// Ncn の部品。
+	ncnRE = regexp.MustCompile(`\bfunction\b|\balias\b|\bIFS\b|\w` + jsSpace + `*\(` + jsSpace + `*\)|` +
+		`(?:^|[` + jsSpaceChars + `;&|(){}])(?:argv|[0-9]+)(?:\[[^\]]*\])?=|` +
+		`(?:^|[` + jsSpaceChars + `;&|(){}!])set` + jsSpace + `[^;&|\n]*(?:\$\(|` + "`)")
+	ncnBuiltinRE   = regexp.MustCompile(`^(?:shift|source|\.|eval|trap)$`)
+	ncnDashRE      = regexp.MustCompile(`^(?:-|\d+$)`)
+	ncnFlagRE      = regexp.MustCompile(`^[-+]`)
+	ncnOptionArgRE = regexp.MustCompile(`[oO]$`)
+
+	// Jcn の部品。移植元の `rm(?:dir)?(?![\w.-])` は、直後の 1 文字を消費する形に展開した（パターンの末尾なので意味は同じ）。
+	jcnBraceRE    = regexp.MustCompile(`\{[^{}` + jsSpaceChars + `]*(?:,|\.\.)`)
+	jcnRemovalRE  = regexp.MustCompile(`(?i)(?:^|[^\w.-])rm(?:dir)?(?:[^\w.-]|$)`)
+	jcnVariableRE = regexp.MustCompile("(?:^|[;&|(){}\\n`!])" + jsSpace +
+		`*(?:\w+\+?=` + jsNotSpace + `*` + jsSpace + `+)*\$`)
+
+	directoryChangeRE = regexp.MustCompile(`^(?:cd|pushd|popd|chdir)$`)
+	nameAssignmentRE  = regexp.MustCompile(`^[A-Za-z_]\w*\+?=`)
+	exeSuffixRE       = regexp.MustCompile(`(?i)\.exe$`)
+	jsSpaceRE         = regexp.MustCompile(`^` + jsSpace + `$`)
+
+	// shells は組み込みの `rde` である。
+	shells = setOf("bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "hush", "rbash")
+	// commandWrappers は組み込みの `B3e` である（後ろに別のコマンドを取る語と、制御構文の予約語）。
+	commandWrappers = setOf("sudo", "doas", "exec", "command", "env", "nice", "nohup", "busybox", "time", "timeout",
+		"stdbuf", "setsid", "ionice", "pkexec", "runuser", "eval", "xargs",
+		"do", "then", "else", "elif", "if", "while", "until", "!", "{", "coproc",
+		"builtin", "noglob", "toybox", "trap", "watch", "flock", "chroot", "script")
+	// keywords は単純コマンドの先頭から外す予約語である（tree-sitter はこれらを command の外に置く）。
+	keywords = setOf("do", "then", "else", "elif", "if", "while", "until", "!", "{", "}", "coproc")
+)
+
+func setOf(items ...string) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[item] = true
+	}
+	return set
+}
+
+// inlineScript は `FTr` の結果である。judgedOK が false なら、組み込みはスクリプトを検査できない。
+type inlineScript struct {
+	script   string
+	judged   string
+	judgedOK bool
+}
+
+// jsLength は JS の文字列長（UTF-16 の符号単位の数）である。
+func jsLength(text string) int {
+	length := 0
+	for _, r := range text {
+		length++
+		if r > 0xFFFF {
+			length++
+		}
+	}
+	return length
+}
+
+func isJSSpace(r rune) bool {
+	return jsSpaceRE.MatchString(string(r))
+}
+
+// baseName は組み込みの `TR` である。パスの最後の要素から `.exe` を除く。
+func baseName(word string) string {
+	if index := strings.LastIndexAny(word, `\/`); index >= 0 {
+		word = word[index+1:]
+	}
+	return exeSuffixRE.ReplaceAllLiteralString(word, "")
+}
+
+// shellName は組み込みの `$ke` である。`bash-5.2` のような版の付いた名前も同じシェルとみなす。
+func shellName(word string) string {
+	return shellVersionRE.ReplaceAllLiteralString(strings.ToLower(baseName(word)), "")
+}
+
+// simpleCommands は外側のコマンドを単純コマンドの argv に分ける（組み込みは tree-sitter の command ノードの argv を見る）。
+// リダイレクトは演算子と続くファイル名を除く。クォートが閉じないなど字句解析できない入力は判定しない（nil）。
+// heredoc を含む入力も判定しない。本文の行をコマンドとして読んでしまい、スクリプトを書き出すだけの
+// `cat > x.sh <<'EOF'` まで止めるためである（組み込みは本文をコマンドとして扱わない）。
+// コメントやコマンド置換の中までは追わない（組み込みより狭い側）。
+func simpleCommands(command string) [][]string {
+	tokens, err := py.ShlexSplit(command, " \t\r", outerPunctuation)
+	if err != nil {
+		return nil
+	}
+	for _, token := range tokens {
+		if strings.Contains(token, "<<") && !strings.Contains(token, "<<<") && strings.Trim(token, outerPunctuation) == "" {
+			return nil
+		}
+	}
+	var commands [][]string
+	var current []string
+	flush := func() {
+		if len(current) > 0 {
+			commands = append(commands, current)
+		}
+		current = nil
+	}
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		switch {
+		case token != "" && strings.Trim(token, "<>&") == "" && strings.ContainsAny(token, "<>"):
+			index++ // リダイレクトの演算子と、続くファイル名
+		case token != "" && strings.Trim(token, outerPunctuation) == "":
+			flush()
+		default:
+			current = append(current, token)
+		}
+	}
+	flush()
+	return commands
+}
+
+// stripWrappers は単純コマンドの先頭の代入・予約語・wrapper を外す（組み込みの `bL` と `att` の近似）。
+// 組み込みが外す wrapper のうち、引数の形が単純な代表的なものだけを扱う。外せない形はそのまま返す（判定しない側）。
+func stripWrappers(argv []string) []string {
+	for len(argv) > 0 {
+		head := argv[0]
+		if keywords[head] || nameAssignmentRE.MatchString(head) {
+			argv = argv[1:]
+			continue
+		}
+		rest := argv[1:]
+		switch baseName(head) {
+		case "time", "nohup", "command", "builtin", "noglob", "exec":
+			argv = skipOptions(rest, "")
+		case "nice":
+			argv = skipOptions(rest, "n")
+		case "stdbuf":
+			argv = skipOptions(rest, "ioe")
+		case "sudo":
+			argv = skipOptions(rest, "ugCDhprtURT")
+		case "doas":
+			argv = skipOptions(rest, "uC")
+		case "env":
+			argv = skipOptions(rest, "uSCP")
+			for len(argv) > 0 && nameAssignmentRE.MatchString(argv[0]) {
+				argv = argv[1:]
+			}
+		case "timeout":
+			argv = skipOptions(rest, "sk")
+			if len(argv) == 0 {
+				return argv
+			}
+			argv = argv[1:] // 時間
+		default:
+			return argv
+		}
+	}
+	return argv
+}
+
+// skipOptions は先頭のオプションを外す。withArgument に含まれる 1 文字のオプションは、続く語を値として取る。
+func skipOptions(args []string, withArgument string) []string {
+	for len(args) > 0 {
+		arg := args[0]
+		if arg == "--" {
+			return args[1:]
+		}
+		if len(arg) < 2 || arg[0] != '-' {
+			return args
+		}
+		args = args[1:]
+		takesValue := !strings.HasPrefix(arg, "--") && len(arg) == 2 && strings.ContainsRune(withArgument, rune(arg[1]))
+		if takesValue && len(args) > 0 {
+			args = args[1:]
+		}
+	}
+	return args
+}
+
+// findInlineScript は組み込みの `FTr` である。argv がシェルの -c の呼び出しなら、スクリプトと検査できる形を返す。
+func findInlineScript(argv []string) (inlineScript, bool) {
+	if len(argv) == 0 {
+		return inlineScript{}, false
+	}
+	if len(argv) > 1 && (shellName(argv[0]) == "busybox" || shellName(argv[0]) == "toybox") && shells[shellName(argv[1])] {
+		argv = argv[1:]
+	}
+	name := shellName(argv[0])
+	if !shells[name] {
+		return inlineScript{}, false
+	}
+	rest := argv[1:]
+	bashLike := shellBashRE.MatchString(name)
+	hasCommand, unknown := false, false
+	index := 0
+	for ; index < len(rest); index++ {
+		option := rest[index]
+		if option == "-" || option == "--" {
+			index++
+			break
+		}
+		if !shellOptionRE.MatchString(option) {
+			break
+		}
+		var long []string
+		if bashLike {
+			long = shellLongRE.FindStringSubmatch(option)
+		}
+		switch {
+		case long != nil:
+			if long[1] != "" {
+				index++
+			}
+		case strings.HasPrefix(option, "--"):
+			unknown = true
+		default:
+			unknown = unknown || (bashLike && shellBadFlagsRE.MatchString(option[1:])) ||
+				(shellKshRE.MatchString(name) && shellKshFlagRE.MatchString(option))
+			hasCommand = hasCommand || (strings.HasPrefix(option, "-") && strings.Contains(option, "c"))
+			index += len(shellOptionArgRE.FindAllString(option, -1))
+		}
+	}
+	if unknown {
+		for _, arg := range rest {
+			if shellCommandFlag.MatchString(arg) {
+				return inlineScript{script: strings.Join(rest, " ")}, true
+			}
+		}
+		return inlineScript{}, false
+	}
+	if !hasCommand || index >= len(rest) {
+		return inlineScript{}, false
+	}
+	script := rest[index]
+	found := inlineScript{script: script}
+	if jsLength(script) > maxInlineScript || uncheckableScript(script, name) {
+		return found, true
+	}
+	if !positionalUseRE.MatchString(script) {
+		found.judged, found.judgedOK = script, true
+		return found, true
+	}
+	// $0 は -c の後の最初の引数（無ければシェルの名前）、$1 以降はその後の引数である。
+	positional := []string{name}
+	if index+1 < len(rest) {
+		positional = rest[index+1:]
+	}
+	values := make([]string, len(positional))
+	for position, arg := range positional {
+		value, ok := literalValue(arg)
+		if !ok {
+			return found, true
+		}
+		values[position] = value
+	}
+	if hasUnknownBraceParameter(script) || strings.Contains(script, "'") || isComplexScript(script) {
+		return found, true
+	}
+	if judged, ok := substitutePositional(script, values); ok && !isComplexScript(judged) {
+		found.judged, found.judgedOK = judged, true
+	}
+	return found, true
+}
+
+// uncheckableScript は `FTr` のうち、スクリプトの形だけで検査を諦める条件である（括弧展開・alias・IFS・zsh 固有の展開）。
+func uncheckableScript(script, name string) bool {
+	for _, word := range zcnRE.FindAllString(script, -1) {
+		if isBraceExpansion(word) {
+			return true
+		}
+	}
+	if aliasRE.MatchString(script) || ifsRE.MatchString(ifsReadRE.ReplaceAllLiteralString(script, " read")) {
+		return true
+	}
+	return name == "zsh" && zshRE.MatchString(script)
+}
+
+// isBraceExpansion は組み込みの `NTr` である。語が静的に展開できない括弧展開に見えるかを返す。
+// sed の `\{0,1\}` のようにクォートの中の括弧も数える（組み込みと同じ）。
+func isBraceExpansion(word string) bool {
+	text := braceVarRE.ReplaceAllLiteralString(word, "$X")
+	opens := strings.Count(text, "{")
+	if opens == 0 || !braceSplitRE.MatchString(text) {
+		return false
+	}
+	match := braceShapeRE.FindStringSubmatch(text)
+	if opens > 1 || match == nil {
+		return true
+	}
+	head, items, tail := match[1], match[2], match[3]
+	if !braceSplitRE.MatchString(items) {
+		return false
+	}
+	if braceHeadRE.MatchString(head) || braceTailRE.MatchString(tail) {
+		return true
+	}
+	for _, item := range braceSplitRE.Split(items, -1) {
+		item = quoteCharsRE.ReplaceAllLiteralString(item, "")
+		if braceItemRE.MatchString(item) || (item == "" && braceEmptyRE.MatchString(head+tail)) || expandsToRemoval(word) {
+			return true
+		}
+	}
+	return false
+}
+
+// expandsToRemoval は組み込みの `efn` である。括弧展開の候補のどれかが rm / rmdir になるかを返す。
+func expandsToRemoval(word string) bool {
+	match := braceShapeRE.FindStringSubmatch(quoteCharsRE.ReplaceAllLiteralString(word, ""))
+	if match == nil {
+		return false
+	}
+	for _, item := range braceSplitRE.Split(match[2], -1) {
+		if removalPathRE.MatchString(match[1] + item + match[3]) {
+			return true
+		}
+	}
+	return false
+}
+
+// literalValue は位置引数の値を静的に書ける形にする（組み込みの `Se`）。
+// `~` で始まる値は組み込みと同じくホームディレクトリへ展開し、展開できない形（`~user`）は検査を諦める（ok が false）。
+// 静的に書けない値は inlineShellValue にする。
+func literalValue(arg string) (string, bool) {
+	flat := strings.NewReplacer("\t", " ", "\n", " ")
+	if tildeRE.MatchString(arg) {
+		if expanded := py.Home() + arg[1:]; literalArgRE.MatchString(expanded) {
+			return flat.Replace(expanded), true
+		}
+		return inlineShellValue, true
+	}
+	if strings.HasPrefix(arg, "~") {
+		return "", false
+	}
+	if literalArgRE.MatchString(arg) {
+		return flat.Replace(arg), true
+	}
+	return inlineShellValue, true
+}
+
+// hasUnknownBraceParameter は `/\$\{(?![0-9]+(?:\}|:?\?[^}$`]*\})|[@*#]\})[!#@*0-9]/` である。
+// RE2 は先読みを扱えないので、`${` の位置ごとに先読みの部分を先頭一致で確かめる。
+func hasUnknownBraceParameter(script string) bool {
+	for offset := 0; ; {
+		found := strings.Index(script[offset:], "${")
+		if found < 0 {
+			return false
+		}
+		rest := script[offset+found+2:]
+		if rest != "" && strings.ContainsRune("!#@*0123456789", rune(rest[0])) && !positionalLookRE.MatchString(rest) {
+			return true
+		}
+		offset += found + 2
+	}
+}
+
+// substitutePositional は位置引数（`$1`・`${1:?}`・`"$@"`・`$#` など）を値に置き換える（`FTr` の末尾）。
+// 置き換えると意味が変わる形（クォートの外の `$@` に複数の値、奇数個のクォートの後の `"$@"`）は ok を false にする。
+func substitutePositional(script string, values []string) (string, bool) {
+	valueAt := func(position string) (string, bool) {
+		n, err := strconv.Atoi(position)
+		if err != nil || n >= len(values) {
+			return "", false
+		}
+		return values[n], true
+	}
+	ok := true
+	var out strings.Builder
+	last := 0
+	for _, match := range positionalRE.FindAllStringSubmatchIndex(script, -1) {
+		whole := script[match[0]:match[1]]
+		group := func(n int) (string, bool) {
+			if match[2*n] < 0 {
+				return "", false
+			}
+			return script[match[2*n]:match[2*n+1]], true
+		}
+		guardedNumber, isGuarded := group(1)
+		colon, _ := group(2)
+		name, hasName := group(3)
+		if !hasName {
+			name, hasName = group(4)
+		}
+		replacement := whole
+		switch {
+		case strings.HasPrefix(whole, `"`):
+			before := escapeRE.ReplaceAllLiteralString(script[:match[0]], "")
+			ok = ok && strings.Count(before, `"`)%2 == 0
+			quoted := make([]string, 0, len(values))
+			for _, value := range values[1:] {
+				quoted = append(quoted, `"`+value+`"`)
+			}
+			replacement = strings.Join(quoted, " ")
+		case isGuarded:
+			value, exists := valueAt(guardedNumber)
+			switch {
+			case !exists:
+				replacement = inlineShellGuarded
+			case (value == "" || value == inlineShellValue) && colon != "":
+				replacement = inlineShellGuarded
+			default:
+				replacement = value
+			}
+		case !hasName:
+			// エスケープはそのまま残す。
+		case name == "#":
+			replacement = strconv.Itoa(len(values) - 1)
+		case name == "@" || name == "*":
+			ok = ok && len(values) <= 2
+			replacement = ""
+			if len(values) > 1 {
+				replacement = values[1]
+			}
+		default:
+			replacement, _ = valueAt(name)
+		}
+		out.WriteString(script[last:match[0]])
+		out.WriteString(replacement)
+		last = match[1]
+	}
+	out.WriteString(script[last:])
+	return out.String(), ok
+}
+
+// isComplexScript は組み込みの `Ncn` である。関数定義・alias・IFS・位置引数への代入・`set` での置換、
+// コマンドの位置にある shift・source・eval・trap・変数を含むスクリプトは、置き換えでは意味を保てない。
+func isComplexScript(script string) bool {
+	if ncnRE.MatchString(script) {
+		return true
+	}
+	for _, words := range splitCommands(script, true) {
+		for position, word := range words {
+			if !onlyWrappersBefore(words[:position]) {
+				break
+			}
+			if ncnBuiltinRE.MatchString(word) || startsWithUntrackedVariable(word) {
+				return true
+			}
+			if word == "set" && setChangesPositional(words[position+1:]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// onlyWrappersBefore は、語の前が wrapper・オプション・数だけかを返す（`Ncn` の前置きの条件）。
+func onlyWrappersBefore(words []string) bool {
+	for _, word := range words {
+		if !commandWrappers[word] && !ncnDashRE.MatchString(word) {
+			return false
+		}
+	}
+	return true
+}
+
+// startsWithUntrackedVariable は `/^\$(?!\{?[0-9@*#])/` である。
+func startsWithUntrackedVariable(word string) bool {
+	if !strings.HasPrefix(word, "$") {
+		return false
+	}
+	rest := strings.TrimPrefix(word[1:], "{")
+	return rest == "" || !strings.ContainsRune("0123456789@*#", rune(rest[0]))
+}
+
+// setChangesPositional は `set` の引数が位置引数を置き換えるか（`-`・`--`・オプションでない値）を返す。
+func setChangesPositional(args []string) bool {
+	for position, arg := range args {
+		previous := ""
+		if position > 0 {
+			previous = args[position-1]
+		}
+		if arg == "-" || arg == "--" || (!ncnFlagRE.MatchString(arg) && !ncnOptionArgRE.MatchString(previous)) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitCommands は組み込みの `u$` である。スクリプトを区切りで分け、各断片の語（リダイレクトと先頭の代入を除く）を返す。
+// quoted が true ならクォートの中の区切りと空白を区切りとして扱わない。false なら区切りとして扱う（組み込みは両方で調べる）。
+func splitCommands(script string, quoted bool) [][]string {
+	text := script
+	if quoted {
+		text = usQuotedRE.ReplaceAllStringFunc(text, func(part string) string {
+			if strings.HasPrefix(part, `\`) {
+				return part
+			}
+			return usQuotedCharsRE.ReplaceAllLiteralString(part, "\x00")
+		})
+	}
+	text = replaceDuplications(text)
+	text = usRedirectRE.ReplaceAllLiteralString(text, ">")
+	text = stripQuotes(text)
+	var commands [][]string
+	for _, part := range usSplitRE.Split(text, -1) {
+		var raw []string
+		for _, word := range usWordSplitRE.Split(part, -1) {
+			if word != "" {
+				raw = append(raw, word)
+			}
+		}
+		var kept []string
+		leadingAssignments := true
+		for position, word := range raw {
+			isAssignment := usAssignmentRE.MatchString(word)
+			afterRedirect := position > 0 && usRedirectOnlyRE.MatchString(raw[position-1])
+			if !usRedirectWordRE.MatchString(word) && !afterRedirect && (!isAssignment || !leadingAssignments) {
+				kept = append(kept, word)
+			}
+			leadingAssignments = leadingAssignments && isAssignment
+		}
+		commands = append(commands, kept)
+	}
+	return commands
+}
+
+// stripQuotes は `/\$(?=['"])|['"\\]/g` を空にする。先読みの `$` は、続くクォートと一緒に消す形に展開した
+// （クォートはどのみち同じ置き換えで消える）。
+func stripQuotes(text string) string {
+	return usStripQuotesRE.ReplaceAllLiteralString(text, "")
+}
+
+// replaceDuplications は `/\d*[<>]&(?:\d+-?|-)(?![^\s;&|()])/g` を空白に置き換える。
+// 先読みは一致の直後の 1 文字を確かめる形にした。短い一致へ戻っても直後は数字か `-` になり先読みを満たさないので、
+// 最長の一致だけ見ればよい。
+func replaceDuplications(text string) string {
+	var out strings.Builder
+	last := 0
+	for _, match := range usDupRE.FindAllStringIndex(text, -1) {
+		if match[1] < len(text) {
+			next, _ := utf8.DecodeRuneInString(text[match[1]:])
+			if !isJSSpace(next) && !strings.ContainsRune(";&|()", next) {
+				continue
+			}
+		}
+		out.WriteString(text[last:match[0]])
+		out.WriteString(" ")
+		last = match[1]
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
+
+// needsInlineCheck は組み込みの `Jcn` である。スクリプトの中身を検査する必要があるか
+// （括弧展開・rm の語・区切りの直後の変数のどれかを含むか）を返す。
+func needsInlineCheck(script string) bool {
+	text := stripQuotes(script)
+	return jcnBraceRE.MatchString(text) || jcnRemovalRE.MatchString(text) || jcnVariableRE.MatchString(text)
+}
+
+// mayRunRemoval は組み込みの `Dwe` である。スクリプトが rm / rmdir を実行しうるか
+// （wrapper やオプションと並んだ rm、コマンドの位置の rm や変数、rm を指す代入や括弧展開）を返す。
+// コマンドの位置の判定は、直前の語が wrapper かで見る。`direnv exec "$DIR"` の `exec` も wrapper とみなす（組み込みと同じ）。
+func mayRunRemoval(script string) bool {
+	isRemoval := func(word string) bool {
+		return removalWordRE.MatchString(baseName(redirectTailRE.ReplaceAllLiteralString(word, ""))) ||
+			removalListRE.MatchString(word)
+	}
+	isWrapper := func(word string) bool { return commandWrappers[strings.ToLower(baseName(word))] }
+	for _, words := range append(splitCommands(script, true), splitCommands(script, false)...) {
+		for position, word := range words {
+			if isRemoval(word) {
+				for other, neighbor := range words {
+					if other != position && (isWrapper(neighbor) ||
+						(shortFlagsRE.MatchString(neighbor) && strings.Contains(neighbor, "c")) || findExecRE.MatchString(neighbor)) {
+						return true
+					}
+				}
+			}
+			if (isRemoval(word) || strings.HasPrefix(word, "$")) && (position == 0 || isWrapper(words[position-1])) {
+				return true
+			}
+			if removalAssignRE.MatchString(word) {
+				return true
+			}
+		}
+	}
+	for _, word := range zcnRE.FindAllString(script, -1) {
+		if expandsToRemoval(word) {
+			return true
+		}
+	}
+	return false
+}
+
+// countDirectoryChanges はスクリプトの語のうち cd・pushd・popd・chdir の数である。
+func countDirectoryChanges(script string) int {
+	count := 0
+	for _, words := range splitCommands(script, true) {
+		for _, word := range words {
+			if directoryChangeRE.MatchString(baseName(word)) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// inlineCheckDisabled は組み込みの真偽値の環境変数の読み方（`Ne`: 1・true・yes・on を真とする）で disableInlineEnv を読む。
+func inlineCheckDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(disableInlineEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// findInlineShell は shell -c の 2 分岐を判定し、拒否するなら発火した分岐を返す。
+// 外側の各単純コマンドについて、スクリプトを検査できなければ `Lwe`、検査できれば中身を再帰的に判定する。
+func findInlineShell(command, cwd string, depth int) (finding, error) {
+	if inlineCheckDisabled() {
+		return finding{}, nil
+	}
+	// 外側の cd の有無は、shell -c が何個あっても 1 回だけ調べる（入力の長さの 2 乗にしない）。
+	outerCD, checkedCD := false, false
+	for _, argv := range simpleCommands(command) {
+		found, ok := findInlineScript(stripWrappers(argv))
+		if !ok {
+			continue
+		}
+		judged := found.script
+		if found.judgedOK {
+			judged = found.judged
+		}
+		if !needsInlineCheck(judged) && !strings.Contains(found.script, "$'") {
+			continue
+		}
+		unchecked := !found.judgedOK || depth >= maxInlineDepth || jsLength(judged) > maxInlineScript ||
+			countDirectoryChanges(judged) > maxInlineDirectoryChanges
+		if unchecked {
+			if mayRunRemoval(judged) {
+				return finding{target: idInlineUnchecked, why: idWhyInlineUnchecked, how: idHowInlineUnchecked}, nil
+			}
+			continue
+		}
+		if !checkedCD {
+			outerCD, checkedCD = hasDirectoryChange(command), true
+		}
+		if outerCD {
+			continue
+		}
+		inner := strings.ReplaceAll(judged, inlineShellValue, "${"+inlineShellValue+"}")
+		result, err := evaluateAt(inner, cwd, depth+1)
+		if err != nil {
+			return finding{}, err
+		}
+		if result.target == "" {
+			continue
+		}
+		if strings.Contains(result.token, "__INLINE_SHELL_") {
+			// 置き換え先の名前は書いた覚えのない文字列なので、組み込みの `LKe` と同じく `${…}` に戻して見せる。
+			token := strings.NewReplacer(inlineShellGuarded, "${…:?}", "${"+inlineShellValue+"}", "${…}").Replace(result.token)
+			result = finding{target: idInlineValue, command: result.command, token: token,
+				why: idWhyInlineValue, how: idHowInlineValue}
+		}
+		return result, nil
+	}
+	return finding{}, nil
 }
