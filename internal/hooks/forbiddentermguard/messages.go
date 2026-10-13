@@ -8,7 +8,7 @@ import (
 )
 
 // 理由文は「該当箇所・なぜ・どうする」を返す。回避を思いとどまらせるのはこの文面だけなので、
-// 語リストの編集や別コマンドでの迂回をしないことを対応に書く。
+// 語リストの編集や、同じ語を形を変えて送る迂回（綴りを崩す・別コマンドや別ファイル経由）をしないことを対応に書く。
 const (
 	idReason        = "forbidden-term-guard.reason"
 	idMore          = "forbidden-term-guard.more"
@@ -36,13 +36,15 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "このリポジトリの禁止語リストに載っている語が本文に含まれています。" +
 			"他リポジトリやサービスの名称を公開先へ持ち出さないための設定です。",
 	},
-	// 語を取り除いて再実行させる。語リストの編集や別コマンドでの迂回を禁じ、無理ならユーザーに判断を仰がせる。
+	// 語を取り除いて再実行させる。語リストの編集や、同じ語を形を変えて送る迂回を禁じ、無理ならユーザーに判断を仰がせる。
 	idHow: {
-		EN: "Remove the term from the text and run the command again. Do not edit or delete the term list, " +
-			"and do not retry with a different command to get around this block. If removing the term " +
+		EN: "Remove the term from the text and run the command again; you do not need to ask the user. " +
+			"Do not edit or delete the term list, and do not send the same term in another form to get around " +
+			"this block, such as a broken spelling, an encoding, or a different command or file. If removing the term " +
 			"would break the meaning, tell the user what you want to write and how, and ask for a decision.",
-		JA: "該当箇所から語を取り除いて実行し直してください。語リストの編集・削除や、" +
-			"別コマンドでの迂回はしないでください。取り除くと意味が通らなくなる場合は、" +
+		JA: "該当箇所から語を取り除いて実行し直してください。ユーザーへの確認は不要です。" +
+			"語リストの編集・削除や、綴りを崩す・エンコードする・別コマンドや別ファイル経由で送るなど" +
+			"形を変えて同じ語を送ることはしないでください。取り除くと意味が通らなくなる場合は、" +
 			"何をどう書きたいかをユーザーに伝えて判断を仰いでください。",
 	},
 	// 語リストに RE2 で使えない re: の行があり、検査できないときの理由文。
@@ -55,12 +57,14 @@ var messages = i18n.Register(i18n.Catalog{
 			"理由: 禁止語リストの re: の行に、hhx の正規表現（RE2）で使えない構文があり、その語を検査できません。" +
 			" (語リスト: {{.Path}} の {{.Lines}} 行目)\n\n対応: {{.How}}",
 	},
-	// 語リストの修正をユーザーに依頼させる。語リストの編集や別コマンドでの迂回を禁じる。
+	// 語リストの修正をユーザーに依頼させる。語リストの編集や、同じ本文を形を変えて送る迂回を禁じる。
 	idInvalidHow: {
 		EN: "Ask the user to fix those lines of the term list to the syntax hhx supports (docs/forbidden-terms.md). " +
-			"Do not edit or delete the term list, and do not retry with a different command to get around this block.",
+			"Do not edit or delete the term list, and do not send the same text in another form " +
+			"(a different command or file) to get around this block.",
 		JA: "語リストの該当行を hhx で使える構文（docs/forbidden-terms.md）に直すよう、" +
-			"ユーザーに依頼してください。語リストの編集・削除や、別コマンドでの迂回はしないでください。",
+			"ユーザーに依頼してください。語リストの編集・削除や、別コマンド・別ファイル経由など" +
+			"形を変えて同じ本文を送ることはしないでください。",
 	},
 	// 行番号を並べるときの区切り。
 	idLineSeparator: {EN: ", ", JA: "・"},

@@ -3,7 +3,8 @@ package irreversibleguard
 import "github.com/HappyOnigiri/hhx/internal/i18n"
 
 // 理由文は「何を・なぜ・どうする」の 3 点を返す。回避を思いとどまらせるのはこの文面だけなので、
-// 「迂回する別コマンド・別ツールを試さない」ことを対応に書く。
+// 対応には、操作を使わずに目的を達成する書き換えは確認なしで進めてよいことと、
+// 同じ操作を形を変えて実行する迂回（分かりにくい書き方・別ツール・スクリプトファイル経由）を禁じることを分けて書く。
 // 発火したルールの対象の表記（target）は「❌ ブロック:」の後ろに出し、テストはこれでどのルールが発火したかを見る。
 const (
 	idReason = "irreversible-guard.reason"
@@ -75,13 +76,26 @@ var messages = i18n.Register(i18n.Catalog{
 		EN: "❌ Blocked: {{.Target}}\n\nReason: {{.Why}}\n\nAction: {{.How}}",
 		JA: "❌ ブロック: {{.Target}}\n\n理由: {{.Why}}\n\n対応: {{.How}}",
 	},
-	// 別コマンド・別ツールでの迂回を禁じ、ユーザーへの報告に誘導する。承認されても実行はユーザーが行う。
+	// 操作を使わない書き換えは確認なしで進めさせ、同じ操作を形を変えて実行する迂回を禁じる。
+	// 判定はコマンドの文字列を区切りごとに見るので、別の対象への操作が同居しただけで止まることがある。その場合の書き換えも許す。
+	// 操作そのものが必要ならユーザーへの報告に誘導する。承認されても実行はユーザーが行う。
 	idHow: {
-		EN: "Do not retry with a different command or tool to get around this block. Tell the user the operation, " +
-			"the target, and the purpose, and ask for instructions. " +
-			"Even if the user approves, the user normally runs it themselves.",
-		JA: "迂回する別コマンド・別ツールを試さず、実行したい操作・対象・目的をユーザーに伝えて" +
-			"指示を仰いでください。承認された場合も、原則ユーザー自身が実行します。",
+		EN: "If you can reach the goal without this operation, rewrite the command and continue " +
+			"(for example, drop a step you do not need); you do not need to ask the user. " +
+			"If the command does not actually perform the blocked operation on that target " +
+			"(for example, it only deletes a temporary file), you may also split it into separate commands. " +
+			"Do not perform the same operation in another form to get around this block, such as an obfuscated command, " +
+			"a different tool, or a script file you write and run. " +
+			"If the operation itself is needed, tell the user the operation, the target, and the purpose, " +
+			"and ask for instructions. Even if the user approves, the user normally runs it themselves.",
+		JA: "この操作をせずに目的を達成できるなら、コマンドを書き換えて進めてください " +
+			"(例: 不要な手順を外す)。ユーザーへの確認は不要です。" +
+			"ブロックされた対象にその操作を実際には行っていない (例: 消すのは一時ファイルだけ) なら、" +
+			"コマンドを分けて実行してもかまいません。" +
+			"同じ操作を、分かりにくいコマンドへの書き換え・別ツール・スクリプトファイルに書いての実行など" +
+			"形を変えて行い、このブロックを避けることはしないでください。" +
+			"この操作そのものが必要なら、実行したい操作・対象・目的をユーザーに伝えて指示を仰いでください。" +
+			"承認された場合も、原則ユーザー自身が実行します。",
 	},
 
 	// A 類: 資格情報。どのシステムが依存しているかはユーザーにしか分からない。

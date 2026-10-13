@@ -3,7 +3,8 @@ package prmergeguard
 import "github.com/HappyOnigiri/hhx/internal/i18n"
 
 // 理由文は「何を・なぜ・どうする」の 3 点を返す。回避を思いとどまらせるのはこの文面だけなので、
-// 「迂回する別コマンドを試さない」ことを対応に書く。
+// 対応には、マージせずに目的を達成する書き換えは確認なしで進めてよいことと、
+// マージを形を変えて実行する迂回（別のコマンド・API・スクリプトファイル経由）を禁じることを分けて書く。
 // 発火したルールごとの対象の表記（target）は「❌ ブロック:」の後ろに出し、テストはこれでどのルールが発火したかを見る。
 const (
 	idReason        = "pr-merge-guard.reason"
@@ -29,11 +30,16 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "PR のマージ判断 (タイミング・マージ方式・CI の確認) はユーザーが手動で行う運用です。" +
 			"API 経由・git 経由を含め、マージに至る操作はすべて対象です。",
 	},
-	// 別コマンドでの迂回を禁じ、ユーザーへの報告に誘導する。
+	// マージしない書き換えは確認なしで進めさせ、マージを形を変えて実行する迂回を禁じる。マージが必要ならユーザーへの報告に誘導する。
 	idHow: {
-		EN: "Do not retry with a different command to get around this block. " +
-			"Tell the user what you want to run and why, and ask for instructions.",
-		JA: "迂回する別コマンドを試さず、実行したい内容と目的をユーザーに伝えて指示を仰いでください。",
+		EN: "If you can reach the goal without merging, rewrite the command and continue; you do not need to ask the user. " +
+			"Do not perform the merge in another form to get around this block, such as a different command, " +
+			"an API call, or a script file you write and run. " +
+			"If the merge itself is needed, tell the user what you want to run and why, and ask for instructions.",
+		JA: "マージせずに目的を達成できるなら、コマンドを書き換えて進めてください。ユーザーへの確認は不要です。" +
+			"マージを、別のコマンド・API・スクリプトファイルに書いての実行など形を変えて行い、" +
+			"このブロックを避けることはしないでください。" +
+			"マージそのものが必要なら、実行したい内容と目的をユーザーに伝えて指示を仰いでください。",
 	},
 	// gh pr merge の直接の実行。
 	idTargetPRMerge: {EN: "gh pr merge", JA: "gh pr merge"},
