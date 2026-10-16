@@ -396,8 +396,9 @@ func TestGivesUpWhenTheHeadNeverCatchesUp(t *testing.T) {
 		"no newer commits": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
-			// 偽の gh の起動には 1 秒ほどかかることがあるので、少なくとも 1 回は取り直せる長さにする。
-			shortWait(t, 4*time.Second, 100*time.Millisecond)
+			// 偽の gh の起動には負荷によって数秒かかることがあるので、git の起動と 1 回目の取得を終えても
+			// 少なくとも 1 回は取り直せる長さにする。間隔は、並列に走る他のテストへ負荷をかけない程度に空ける。
+			shortWait(t, 10*time.Second, 3*time.Second)
 			f := newFixture(t)
 			f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead,
 				"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, nodes...)}})))
@@ -408,7 +409,7 @@ func TestGivesUpWhenTheHeadNeverCatchesUp(t *testing.T) {
 			}
 			want := expected(t, nodes, true)
 			if nodes == nil {
-				want = messages.Text(hooktest.Language, idLaggingOnly, map[string]any{"Number": "10088", "Seconds": 4,
+				want = messages.Text(hooktest.Language, idLaggingOnly, map[string]any{"Number": "10088", "Seconds": int(waitLimit / time.Second),
 					"Instruction": messages.T(hooktest.Language, idDefaultInstruction), "URL": "https://github.com/o/r/pull/10088"})
 			}
 			if !ok || context != want {
