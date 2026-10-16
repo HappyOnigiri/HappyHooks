@@ -8,11 +8,17 @@
 // PostToolUse に置く理由と、発火しない条件（dry-run・ブランチの削除・Everything up-to-date・失敗した push・GitHub 以外）は
 // push-ci-context と同じ。加えてこの hook に固有の条件:
 //   - `gh pr create` では発火しない（作りたての本文は差分と同時に書かれている）
-//   - push した HEAD に紐づく open の PR が無ければ発火しない
-//   - gh が失敗・遅延した場合は無出力で終える（push を邪魔しない）
+//   - push した HEAD に紐づく open の PR が無ければ発火しない（待たずに終える）
+//   - gh が失敗・遅延した場合や応答が不正な場合は無出力で終える（push を邪魔しない）
+//
+// push 直後の GitHub は、PR のコミット一覧がまだ push 前のことがある。PR の head（headRefOid）が push した HEAD と
+// 一致するまで問い合わせを繰り返し、一致した時点の一覧で判定する。待つのは git の呼び出しを含めて全体で waitLimit まで。
+// 上限に達したら最後に取得した一覧で判定し、一覧が遅れている可能性を添える（本文より新しい commit が 0 件でも出す）。
 //
 // 既知の限界: rebase / amend / cherry-pick は committedDate が振り直されるので、本文が正しくても発火することがある。
 // 止めはせず注意に留めるので、実害は「1 回確認する」だけに収まる。逆に、古い commit を後から取り込んだ場合は取りこぼす。
+// HEAD 以外のブランチを push したときや、HEAD が別の open の PR（積み重ねたブランチなど）にも含まれていて
+// そちらが先に返ったときは、head が一致しないので上限まで待ち、一覧の遅れとして案内する。
 //
 // push の判定は push-ci-context と別の実装で、意味も違う（こちらは正規表現で区切り、引用符などを消してから空白で分ける）。
 // デバッグ経路（`hhx hook pr-body-staleness '<コマンド文字列>'`）の引数はコマンド文字列で、プロセスの作業ディレクトリの
@@ -51,9 +57,10 @@ func Definition() hookrt.Definition {
 		Name:           Name,
 		DefaultEnabled: true,
 		Registrations: []hookrt.Registration{
-			{Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash", Timeout: 15, StatusMessage: statusMessage},
-			{Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", Timeout: 15, StatusMessage: statusMessage,
-				AdditionalContextLimit: 4096},
+			{Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
+				StatusMessage: statusMessage},
+			{Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
+				StatusMessage: statusMessage, AdditionalContextLimit: 4096},
 		},
 		Gate:        gate,
 		Run:         run,
@@ -70,12 +77,21 @@ type Settings struct {
 }
 
 const (
-	// commandTimeout は git と gh の 1 回の上限である。
+	// commandTimeout は git と gh の 1 回の上限である。待ちの残り時間がこれより短ければ、残り時間に抑える。
 	commandTimeout = 8 * time.Second
+	// registrationTimeout は登録のタイムアウト（秒）である。waitLimit と、呼び出しの終了・出力までの余裕が収まる値にする。
+	registrationTimeout = 30
 	// maxHeadlines は案内に載せる commit の件数である。
 	maxHeadlines = 5
 	// commitWindow は本文より後の commit を探す範囲である。これを超えて積まれた PR は先頭の数件で十分伝わる。
 	commitWindow = 50
+)
+
+// waitLimit と retryInterval は PR の head が push した HEAD に追いつくのを待つ上限と、問い合わせの間隔である。
+// テストから差し替える。
+var (
+	waitLimit     = 20 * time.Second
+	retryInterval = 2 * time.Second
 )
 
 var query = fmt.Sprintf(`
@@ -85,7 +101,7 @@ query($owner:String!,$repo:String!,$sha:GitObjectID!){
       ... on Commit {
         associatedPullRequests(first:3){
           nodes{
-            number url state lastEditedAt createdAt
+            number url state lastEditedAt createdAt headRefOid
             commits(last:%d){nodes{commit{committedDate messageHeadline parents{totalCount}}}}
           }
         }
@@ -111,12 +127,12 @@ func run(c *hookrt.Context) error {
 	if command == "" || !triggersPush(command) || !toolresponse.Succeeded(response) {
 		return nil
 	}
-	pullRequest, err := fetch(cwd)
+	pullRequest, lagging, err := fetch(cwd)
 	if err != nil || pullRequest == nil {
 		return err
 	}
 	headlines, err := staleCommits(pullRequest)
-	if err != nil || len(headlines) == 0 {
+	if err != nil || (len(headlines) == 0 && !lagging) {
 		return err
 	}
 	var settings Settings
@@ -124,7 +140,7 @@ func run(c *hookrt.Context) error {
 	_ = c.Settings(&settings)
 	language := c.Language()
 	instruction := settings.Instruction(language)
-	text, err := message(language, pullRequest, headlines, instruction)
+	text, err := message(language, pullRequest, headlines, instruction, lagging)
 	if err != nil {
 		return err
 	}
@@ -246,8 +262,13 @@ func triggersPush(command string) bool {
 }
 
 // run1 は git か gh を実行し、stdout の両端の空白を除いて返す。失敗・時間切れ・0 以外の終了なら ok は偽になる。
-func run1(cwd string, name string, args ...string) (string, bool) {
-	output, ok := hookexec.Output(cwd, commandTimeout, name, args...)
+// 上限は commandTimeout と deadline までの残り時間の短い方で、期限を過ぎていれば起動しない。
+func run1(cwd string, deadline time.Time, name string, args ...string) (string, bool) {
+	timeout := min(commandTimeout, time.Until(deadline))
+	if timeout <= 0 {
+		return "", false
+	}
+	output, ok := hookexec.Output(cwd, timeout, name, args...)
 	if !ok {
 		return "", false
 	}
@@ -255,8 +276,8 @@ func run1(cwd string, name string, args ...string) (string, bool) {
 }
 
 // ownerRepo は origin が github.com なら owner と repo を返す。
-func ownerRepo(cwd string) (string, string, bool) {
-	url, ok := run1(cwd, "git", "config", "--get", "remote.origin.url")
+func ownerRepo(cwd string, deadline time.Time) (string, string, bool) {
+	url, ok := run1(cwd, deadline, "git", "config", "--get", "remote.origin.url")
 	if !ok || url == "" {
 		return "", "", false
 	}
@@ -299,16 +320,50 @@ func isHostChar(char rune) bool {
 }
 
 // fetch は push した HEAD に紐づく open の PR を返す。取れなければ nil を返す。
-func fetch(cwd string) (map[string]any, error) {
-	owner, repo, ok := ownerRepo(cwd)
+// PR の head が HEAD と一致するまで retryInterval ごとに取り直し、waitLimit に達したら最後に取得した PR を
+// lagging を真にして返す。取り直しで gh が失敗したり PR が見つからなくなったりしたら、待つのをやめて nil を返す。
+func fetch(cwd string) (pullRequest map[string]any, lagging bool, err error) {
+	deadline := time.Now().Add(waitLimit)
+	owner, repo, ok := ownerRepo(cwd, deadline)
 	if !ok {
-		return nil, nil
+		return nil, false, nil
 	}
-	sha, ok := run1(cwd, "git", "rev-parse", "HEAD")
+	sha, ok := run1(cwd, deadline, "git", "rev-parse", "HEAD")
 	if !ok || sha == "" {
-		return nil, nil
+		return nil, false, nil
 	}
-	raw, ok := run1(cwd, "gh", "api", "graphql", "-f", "query="+query,
+	for {
+		next, err := fetchOnce(cwd, deadline, owner, repo, sha)
+		if err != nil {
+			return nil, false, err
+		}
+		if next == nil {
+			// 期限で打ち切られた取り直しは gh の失敗ではないので、最後に取得した PR で判定する。
+			if pullRequest != nil && !time.Now().Before(deadline) {
+				return pullRequest, true, nil
+			}
+			return nil, false, nil
+		}
+		pullRequest = next
+		head, isString := pullRequest["headRefOid"].(string)
+		if !isString || head == "" {
+			// head の読めない応答では、待っても一致を確かめられない。
+			return nil, false, nil
+		}
+		if head == sha {
+			return pullRequest, false, nil
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return pullRequest, true, nil
+		}
+		time.Sleep(min(retryInterval, remaining))
+	}
+}
+
+// fetchOnce は GitHub に 1 回問い合わせ、HEAD に紐づく open の PR を返す。取れなければ nil を返す。
+func fetchOnce(cwd string, deadline time.Time, owner, repo, sha string) (map[string]any, error) {
+	raw, ok := run1(cwd, deadline, "gh", "api", "graphql", "-f", "query="+query,
 		"-F", "owner="+owner, "-F", "repo="+repo, "-F", "sha="+sha)
 	if !ok || raw == "" {
 		return nil, nil
@@ -503,10 +558,23 @@ func terminated(language i18n.Language, sentence string) string {
 	return sentence + messages.T(language, idSentenceEnd)
 }
 
-func message(language i18n.Language, pullRequest map[string]any, headlines []any, instruction string) (string, error) {
+// lagging なら GitHub の一覧の遅れを案内する。本文より新しい commit が無ければ、遅れの案内だけの文面にする。
+func message(
+	language i18n.Language, pullRequest map[string]any, headlines []any, instruction string, lagging bool,
+) (string, error) {
 	number, err := pyDecimal(pullRequest["number"])
 	if err != nil {
 		return "", err
+	}
+	url := pullRequest["url"]
+	if !toolresponse.Truthy(url) {
+		url = ""
+	}
+	seconds := int(waitLimit / time.Second)
+	if len(headlines) == 0 {
+		return messages.Text(language, idLaggingOnly, map[string]any{
+			"Number": number, "Seconds": seconds, "Instruction": instruction, "URL": toolresponse.PyStr(url),
+		}), nil
 	}
 	shown := headlines[:min(len(headlines), maxHeadlines)]
 	lines := make([]string, len(shown))
@@ -522,14 +590,14 @@ func message(language i18n.Language, pullRequest map[string]any, headlines []any
 	if len(headlines) > maxHeadlines {
 		listed += messages.Text(language, idMoreCommits, map[string]any{"Count": len(headlines) - maxHeadlines})
 	}
-	url := pullRequest["url"]
-	if !toolresponse.Truthy(url) {
-		url = ""
-	}
-	return messages.Text(language, idStale, map[string]any{
+	text := messages.Text(language, idStale, map[string]any{
 		"Number": number, "Count": len(headlines), "Commits": listed, "Instruction": instruction,
 		"URL": toolresponse.PyStr(url),
-	}), nil
+	})
+	if lagging {
+		text += "\n" + messages.Text(language, idLagging, map[string]any{"Seconds": seconds})
+	}
+	return text, nil
 }
 
 // pyDecimal は移植元の "%d" % (number or 0) である。整数でも小数でもない真の値は例外になる。

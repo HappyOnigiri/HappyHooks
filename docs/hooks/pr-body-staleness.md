@@ -16,5 +16,13 @@ hooks:
     update-instruction: "If the body is stale, update it with gh pr edit."
 ```
 
-The hook calls authenticated `gh` and gives up silently if it cannot obtain the PR. Rebases and cherry-picks can change
-commit dates, so it may ask for a check when the body is still correct.
+Right after a push, GitHub may still return the PR's commit list from before the push. The hook queries GitHub again
+every 2 seconds until the PR head matches the pushed `HEAD`, then checks that list. It waits at most 20 seconds in total.
+If the head still does not match after 20 seconds, it checks the last list it obtained and adds a note that the list may
+be missing the commits just pushed. It adds this note even when that list has no commits newer than the body, because an
+outdated list cannot show that there are none. It does not wait when the pushed `HEAD` has no open PR.
+
+The hook calls authenticated `gh` and gives up silently if it cannot obtain the PR, including when a retry fails. Rebases and cherry-picks can change
+commit dates, so it may ask for a check when the body is still correct. When you push a branch other than the current `HEAD`, or when
+`HEAD` also belongs to another open PR (for example, stacked branches) that GitHub returns first, the head never matches,
+so the hook waits the full 20 seconds and reports the list as possibly outdated.

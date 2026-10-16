@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,8 @@ func graphql(nodes ...any) map[string]any {
 type fixture struct {
 	gh                      *hooktest.FakeGH
 	github, other, notARepo string
+	// head は github の HEAD で、write が PR の headRefOid の既定値にする。
+	head string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -69,8 +72,38 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.Mkdir(f.notARepo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	f.gh.Write(t, "graphql.json", graphql(pullRequest(nil)))
+	f.head = hooktest.Git(t, f.github, "rev-parse", "HEAD")
+	f.write(t, "graphql.json", graphql(pullRequest(nil)))
 	return f
+}
+
+// write は偽の gh のフィクスチャを書く。headRefOid を持たない PR には、push した HEAD（f.head）を入れる。
+// head を変えたい・欠かしたい PR は、headRefOid を明示する（nil なら JSON の null）。
+func (f *fixture) write(t *testing.T, name string, value any) {
+	t.Helper()
+	if response, ok := value.(map[string]any); ok {
+		data, _ := response["data"].(map[string]any)
+		repository, _ := data["repository"].(map[string]any)
+		object, _ := repository["object"].(map[string]any)
+		associated, _ := object["associatedPullRequests"].(map[string]any)
+		nodes, _ := associated["nodes"].([]any)
+		for _, node := range nodes {
+			if pr, ok := node.(map[string]any); ok {
+				if _, ok := pr["headRefOid"]; !ok {
+					pr["headRefOid"] = f.head
+				}
+			}
+		}
+	}
+	f.gh.Write(t, name, value)
+}
+
+// shortWait は head の一致を待つ上限と間隔を、テストの間だけ短くする。
+func shortWait(t *testing.T, limit, interval time.Duration) {
+	t.Helper()
+	savedLimit, savedInterval := waitLimit, retryInterval
+	waitLimit, retryInterval = limit, interval
+	t.Cleanup(func() { waitLimit, retryInterval = savedLimit, savedInterval })
 }
 
 type call struct {
@@ -148,7 +181,7 @@ func TestCommitAfterTheBodyInjectsAWarning(t *testing.T) {
 	}
 	argv := strings.Join(calls[0].Argv, "\x00")
 	head := hooktest.Git(t, f.github, "rev-parse", "HEAD")
-	for _, part := range []string{"api\x00graphql\x00-f\x00query=", "-F\x00owner=o\x00-F\x00repo=r\x00-F\x00sha=" + head, "commits(last:50)"} {
+	for _, part := range []string{"api\x00graphql\x00-f\x00query=", "-F\x00owner=o\x00-F\x00repo=r\x00-F\x00sha=" + head, "commits(last:50)", "headRefOid"} {
 		if !strings.Contains(argv, part) {
 			t.Errorf("gh argv %q is missing %q", calls[0].Argv, part)
 		}
@@ -211,7 +244,7 @@ func decodeSettings(t *testing.T, content string, settings *Settings) error {
 
 func TestBodyNeverEditedFallsBackToCreatedAt(t *testing.T) {
 	f := newFixture(t)
-	f.gh.Write(t, "graphql.json", graphql(pullRequest(map[string]any{"lastEditedAt": nil, "createdAt": before})))
+	f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"lastEditedAt": nil, "createdAt": before})))
 	if _, ok := f.run(t, call{}); !ok {
 		t.Fatal("createdAt must be used when the body was never edited")
 	}
@@ -219,7 +252,7 @@ func TestBodyNeverEditedFallsBackToCreatedAt(t *testing.T) {
 
 func TestOnlyTheNewerCommitsAreListed(t *testing.T) {
 	f := newFixture(t)
-	f.gh.Write(t, "graphql.json", graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": []any{
+	f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": []any{
 		commit(before, "fix: 本文に書いてある修正", 1), commit(after, "feat: 本文より後のコミット", 1),
 	}}})))
 	context, _ := f.run(t, call{})
@@ -234,7 +267,7 @@ func TestManyCommitsAreSummarized(t *testing.T) {
 	for index := range 7 {
 		nodes = append(nodes, commit(after, "c"+string(rune('0'+index)), 1))
 	}
-	f.gh.Write(t, "graphql.json", graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": nodes}})))
+	f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": nodes}})))
 	context, _ := f.run(t, call{})
 	more := messages.Text(hooktest.Language, idMoreCommits, map[string]any{"Count": 2})
 	if !strings.Contains(context, countText(7)) || !strings.Contains(context, "  - c6\n  - c5\n  - c4\n  - c3\n  - c2"+more+"\n") {
@@ -271,11 +304,14 @@ func TestSilentCases(t *testing.T) {
 		"nodes not a list":           {graphql: map[string]any{"data": map[string]any{"repository": map[string]any{"object": map[string]any{"associatedPullRequests": map[string]any{"nodes": map[string]any{"a": 1}}}}}}},
 		"missing object":             {graphql: map[string]any{"data": map[string]any{"repository": map[string]any{"object": nil}}}},
 		"unreadable body time":       {graphql: graphql(pullRequest(map[string]any{"lastEditedAt": "", "createdAt": ""}))},
+		"null head":                  {graphql: graphql(pullRequest(map[string]any{"headRefOid": nil}))},
+		"empty head":                 {graphql: graphql(pullRequest(map[string]any{"headRefOid": ""}))},
+		"number head":                {graphql: graphql(pullRequest(map[string]any{"headRefOid": 5}))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			if testCase.graphql != nil {
-				f.gh.Write(t, "graphql.json", testCase.graphql)
+				f.write(t, "graphql.json", testCase.graphql)
 			}
 			if testCase.mode != "" {
 				f.gh.SetMode(t, testCase.mode)
@@ -291,6 +327,122 @@ func TestSilentCases(t *testing.T) {
 			}
 			if calls := f.gh.Calls(t); testCase.noGH && len(calls) != 0 {
 				t.Fatalf("gh must not be called: %+v", calls)
+			} else if len(calls) > 1 {
+				// PR が無い・gh の失敗・不正な応答では、head の一致を待たない。
+				t.Fatalf("gh must not be retried: %+v", calls)
+			}
+		})
+	}
+}
+
+// staleHead は push 前の PR の head である。push した HEAD とは一致しない。
+const staleHead = "7d7d4c5239e0000000000000000000000000000a"
+
+// commits は本文より新しい commit を古い順に count 件作る。見出しは prefix と番号である。
+func commits(prefix string, count int) []any {
+	var nodes []any
+	for index := range count {
+		nodes = append(nodes, commit(after, prefix+strconv.Itoa(index+1), 1))
+	}
+	return nodes
+}
+
+func headlinesOf(nodes []any) []any {
+	var headlines []any
+	for index := len(nodes) - 1; index >= 0; index-- {
+		headlines = append(headlines, nodes[index].(map[string]any)["commit"].(map[string]any)["messageHeadline"])
+	}
+	return headlines
+}
+
+func expected(t *testing.T, nodes []any, lagging bool) string {
+	t.Helper()
+	pr := map[string]any{"number": json.Number("10088"), "url": "https://github.com/o/r/pull/10088"}
+	text, err := message(hooktest.Language, pr, headlinesOf(nodes), messages.T(hooktest.Language, idDefaultInstruction), lagging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
+}
+
+// push 直後は PR のコミット一覧が push 前のまま返ることがある（rebase 後の force push で、push 前の 4 件だけが挙がった事例）。
+// head が push した HEAD に追いつくまで取り直し、追いついた一覧で判定する。
+func TestWaitsUntilTheHeadCatchesUp(t *testing.T) {
+	shortWait(t, 15*time.Second, 10*time.Millisecond)
+	f := newFixture(t)
+	old := commits("push 前のコミット ", 4)
+	rebased := append(append([]any{}, old...), commits("rebase 後のコミット ", 14)...)
+	f.write(t, "graphql.1.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead,
+		"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, old...)}})))
+	f.write(t, "graphql.2.json", graphql(pullRequest(map[string]any{
+		"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, rebased...)}})))
+	context, ok := f.run(t, call{})
+	if want := expected(t, rebased, false); !ok || context != want {
+		t.Fatalf("context=\n%s\nwant\n%s", context, want)
+	}
+	more := messages.Text(hooktest.Language, idMoreCommits, map[string]any{"Count": 13})
+	if !strings.Contains(context, countText(18)) || !strings.Contains(context, "  - rebase 後のコミット 10"+more+"\n") {
+		t.Fatalf("the caught-up list must be used:\n%s", context)
+	}
+	if calls := f.gh.Calls(t); len(calls) != 2 {
+		t.Fatalf("gh must be called until the head matches: %d calls", len(calls))
+	}
+}
+
+func TestGivesUpWhenTheHeadNeverCatchesUp(t *testing.T) {
+	for name, nodes := range map[string][]any{
+		"newer commits": commits("push 前のコミット ", 2),
+		// 一覧が古いままでは 0 件を信用できないので、遅れの案内だけを出す。
+		"no newer commits": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// 偽の gh の起動には負荷によって数秒かかることがあるので、git の起動と 1 回目の取得を終えても
+			// 少なくとも 1 回は取り直せる長さにする。間隔は、並列に走る他のテストへ負荷をかけない程度に空ける。
+			shortWait(t, 10*time.Second, 3*time.Second)
+			f := newFixture(t)
+			f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead,
+				"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, nodes...)}})))
+			started := time.Now()
+			context, ok := f.run(t, call{})
+			if elapsed := time.Since(started); elapsed > waitLimit+2*time.Second {
+				t.Errorf("the hook waited %s, beyond the limit %s", elapsed, waitLimit)
+			}
+			want := expected(t, nodes, true)
+			if nodes == nil {
+				want = messages.Text(hooktest.Language, idLaggingOnly, map[string]any{"Number": "10088", "Seconds": int(waitLimit / time.Second),
+					"Instruction": messages.T(hooktest.Language, idDefaultInstruction), "URL": "https://github.com/o/r/pull/10088"})
+			}
+			if !ok || context != want {
+				t.Fatalf("context=\n%s\nwant\n%s", context, want)
+			}
+			if calls := f.gh.Calls(t); len(calls) < 2 {
+				t.Fatalf("gh must be retried before giving up: %d calls", len(calls))
+			}
+		})
+	}
+}
+
+// 取り直しで gh が失敗したり PR が見つからなくなったりしたら、待つのをやめて無出力で終える。
+func TestRetryFailureIsSilent(t *testing.T) {
+	for name, second := range map[string]any{
+		"garbage":         nil,
+		"no pull request": graphql(),
+		"null head":       graphql(pullRequest(map[string]any{"headRefOid": nil})),
+	} {
+		t.Run(name, func(t *testing.T) {
+			shortWait(t, 15*time.Second, 10*time.Millisecond)
+			f := newFixture(t)
+			f.write(t, "graphql.1.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead})))
+			if second == nil {
+				hooktest.WriteFile(t, filepath.Join(f.gh.Dir, "graphql.2.json"), "{ this is not json")
+			} else {
+				f.write(t, "graphql.2.json", second)
+			}
+			if context, ok := f.run(t, call{}); ok {
+				t.Fatalf("must be silent, injected:\n%s", context)
+			}
+			if calls := f.gh.Calls(t); len(calls) != 2 {
+				t.Fatalf("gh must stop after the failed retry: %d calls", len(calls))
 			}
 		})
 	}
@@ -342,7 +494,7 @@ func TestStrangeGitHubResponsesAreSilent(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			f.gh.Write(t, "graphql.json", graphql(pullRequest(pr)))
+			f.write(t, "graphql.json", graphql(pullRequest(pr)))
 			if context, ok := f.run(t, call{}); ok {
 				t.Fatalf("must be silent, injected:\n%s", context)
 			}
@@ -367,7 +519,7 @@ func TestLooseGitHubResponsesFollowPython(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			f.gh.Write(t, "graphql.json", graphql(pullRequest(testCase.pr)))
+			f.write(t, "graphql.json", graphql(pullRequest(testCase.pr)))
 			context, ok := f.run(t, call{})
 			if !ok || !strings.Contains(context, testCase.want) {
 				t.Fatalf("context must contain %q:\n%s", testCase.want, context)
@@ -574,12 +726,15 @@ func TestMessageFitsTheCodexContextLimit(t *testing.T) {
 	}
 	pr := map[string]any{"number": json.Number("123456"), "url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
 	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
-		text, err := message(language, pr, headlines, messages.T(language, idDefaultInstruction))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(text) > limit {
-			t.Errorf("%s: %d bytes, over the limit %d", language, len(text), limit)
+		// 一覧の遅れの案内を足した文面が最も長い。
+		for _, lagging := range []bool{false, true} {
+			text, err := message(language, pr, headlines, messages.T(language, idDefaultInstruction), lagging)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(text) > limit {
+				t.Errorf("%s (lagging=%v): %d bytes, over the limit %d", language, lagging, len(text), limit)
+			}
 		}
 	}
 }
