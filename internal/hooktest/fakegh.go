@@ -23,6 +23,9 @@ import (
 //	gh api repos/<owner>/<repo>/pulls/comments/<id> → comment_<id>.json
 //	gh api graphql ...                              → graphql.json
 //
+// 呼び出しごとに応答を変えるときは、拡張子の前に回数を挟んだ名前（graphql.2.json など）を置く。
+// 回数は同じフィクスチャへの何回目の呼び出しか（1 始まり）で、その名前のファイルが無ければ回数の無い名前を返す。
+//
 // 実体はテストのバイナリそのものである。FAKE_GH_DIR に gh という名前の symlink を置いて PATH の先頭に足し、
 // gh として起動されたテストのバイナリは TestMain の RunFakeGHIfInvoked で偽の gh として振る舞って終わる。
 const (
@@ -124,6 +127,9 @@ func RunFakeGHIfInvoked() {
 }
 
 func runFakeGH(dir string, argv []string) int {
+	name := fixtureName(argv)
+	// 記録する前に数えるので、今回の呼び出しは含まない。
+	nth := countCalls(dir, name) + 1
 	// Python の os.getcwd() と同じく、PWD ではなく実体のパスを記録する。
 	cwd, _ := syscall.Getwd()
 	if line, err := json.Marshal(FakeGHCall{Argv: append([]string{}, argv...), Cwd: cwd}); err == nil {
@@ -150,14 +156,39 @@ func runFakeGH(dir string, argv []string) int {
 		time.Sleep(time.Duration(seconds * float64(time.Second)))
 		return 0
 	}
-	name := fixtureName(argv)
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	if name == "" || err != nil {
+	if name == "" {
+		_, _ = os.Stderr.WriteString("fake gh: no fixture for " + strings.Join(argv, " ") + "\n")
+		return 1
+	}
+	data, err := os.ReadFile(filepath.Join(dir, strings.TrimSuffix(name, ".json")+"."+strconv.Itoa(nth)+".json"))
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(dir, name))
+	}
+	if err != nil {
 		_, _ = os.Stderr.WriteString("fake gh: no fixture for " + strings.Join(argv, " ") + "\n")
 		return 1
 	}
 	_, _ = os.Stdout.Write(data)
 	return 0
+}
+
+// countCalls は calls.log のうち、name のフィクスチャを読む呼び出しの数を返す。
+func countCalls(dir, name string) int {
+	if name == "" {
+		return 0
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fakeGHCallsLog))
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		var call FakeGHCall
+		if json.Unmarshal([]byte(line), &call) == nil && fixtureName(call.Argv) == name {
+			count++
+		}
+	}
+	return count
 }
 
 func fixtureName(argv []string) string {
