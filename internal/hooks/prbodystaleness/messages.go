@@ -7,6 +7,8 @@ const (
 	idMoreCommits        = "pr-body-staleness.more-commits"
 	idDefaultInstruction = "pr-body-staleness.default-update-instruction"
 	idSentenceEnd        = "pr-body-staleness.sentence-end"
+	idLagging            = "pr-body-staleness.lagging"
+	idLaggingOnly        = "pr-body-staleness.lagging-only"
 )
 
 // sentenceEnders は文末とみなす記号である。設定の update-instruction の末尾がこれ以外なら、idSentenceEnd を足す。
@@ -35,6 +37,31 @@ var messages = i18n.Register(i18n.Catalog{
 	idDefaultInstruction: {
 		EN: "If they disagree, update the body with the update-pr skill (or its `local-*` version if the project has one).",
 		JA: "食い違いがあれば update-pr スキル（プロジェクトに `local-*` 版があればそちら）で本文を更新する。",
+	},
+	// idStale の末尾に足す行。GitHub の一覧が push に追いつかないまま待ちの上限に達したので、上の一覧に push した
+	// コミットが欠けているかもしれないと伝え、それらのコミットとも突き合わせさせる。
+	idLagging: {
+		EN: "- GitHub's commit list for this PR still did not include the pushed HEAD after {{.Seconds}} seconds, " +
+			"so the commits you just pushed may be missing from the list above. Check the body against them too.",
+		JA: "- {{.Seconds}} 秒待っても GitHub の PR のコミット一覧に push した HEAD が載らなかったため、" +
+			"いま push したコミットが上の一覧から漏れている可能性がある。それらのコミットとも突き合わせること。",
+	},
+	// GitHub の一覧が push に追いつかないまま待ちの上限に達し、取得できた一覧には本文より新しいコミットが無かったときの文面。
+	// 0 件という結果は信用できないので、いま push したコミットと本文を突き合わせさせる。一致していれば報告だけでよいと伝える。
+	idLaggingOnly: {
+		EN: "The push succeeded, but after {{.Seconds}} seconds GitHub's commit list for PR #{{.Number}} " +
+			"still did not include the pushed HEAD, so this hook could not tell " +
+			"whether the body was written before the commits you just pushed.\n" +
+			"- Check whether the body disagrees with the commits you just pushed " +
+			"(whether behavior that is not in the body was added, and whether what the body says it will do has changed).\n" +
+			"- {{.Instruction}} If the body matches the diff, no update is needed; just report that.\n" +
+			"- PR: {{.URL}}",
+		JA: "push が成功したが、{{.Seconds}} 秒待っても GitHub の PR #{{.Number}} のコミット一覧に push した HEAD が載らなかった。" +
+			"そのため、本文がいま push したコミットより前に書かれたかを判定できていない。\n" +
+			"- 本文の記述といま push したコミットの内容が食い違っていないか確認すること" +
+			"（本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
+			"- {{.Instruction}}差分と一致していれば更新は不要で、その旨だけ報告すればよい。\n" +
+			"- PR: {{.URL}}",
 	},
 	// 文末の記号が無い update-instruction に足す記号。
 	idSentenceEnd: {EN: ".", JA: "。"},
