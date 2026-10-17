@@ -280,27 +280,48 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 		progress = func(text string) { _, _ = fmt.Fprintf(stderr, "wait-ci: [progress] %s\n", text) }
 	}
 
-	if detached {
-		// --any-sha でも PR の特定には現在の commit を使い、監視対象 SHA は任せる。
+	// resolveByCommit は commit の SHA から PR を探す。--any-sha でも PR の特定には現在の commit を使い、監視対象 SHA は任せる。
+	resolveByCommit := func() (string, error) {
 		lookupSHA := sha
 		if lookupSHA == "" {
 			lookupSHA = headOrCurrent()
 		}
-		number, err := waitci.ResolvePR(language, lookupSHA, options.prLookupTimeout, options.interval, gh.FindPRBySHA,
+		return waitci.ResolvePR(language, lookupSHA, options.prLookupTimeout, options.interval, gh.FindPRBySHA,
 			adapters.clock, progress)
-		var noPR *waitci.NoPullRequestError
-		switch {
-		case errors.As(err, &noPR):
-			verdict(idSkippedNoPR, map[string]any{"Reason": noPR.Message})
-			return finish(0, 0, 0)
-		case err != nil:
-			verdict(idDetachedFailed, map[string]any{"Error": waitci.DisplayMessage(err)})
-			return finish(4, 0, 0)
+	}
+	if detached {
+		number, code, done := resolveOrReport(resolveByCommit, idSkippedNoPR, idDetachedFailed, nil, verdict, finish)
+		if done {
+			return code
 		}
 		reference = number
 	}
 
-	outcome := adapters.watch(&waitci.Waiter{
+	watch := func() waitci.Outcome { return startWatch(adapters, gh, options, reference, sha, progress, language) }
+	outcome := watch()
+	byCommit := detached
+	// `git push origin HEAD:<別名>` で push すると、gh は今のブランチの名前で PR を探して見つけられない。
+	// 同じ名前で push 済み（origin/<branch> が HEAD と一致）なら PR がまだ無いだけなので、待たずにスキップする。
+	if outcome.Status == waitci.StatusNoPR && branch != "" &&
+		git.Output("rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch) != headOrCurrent() {
+		number, code, done := resolveOrReport(resolveByCommit, idSkippedNoPRBranch, idCommitLookupFailed,
+			map[string]any{"Branch": branch}, verdict, finish)
+		if done {
+			return code
+		}
+		reference = number
+		byCommit = true
+		outcome = watch()
+	}
+	return reportWaitCI(language, outcome, byCommit, options.allChecks, say, finish)
+}
+
+// startWatch は reference の PR の CI を監視し、結果を返す。
+func startWatch(
+	adapters waitCIAdapters, gh waitci.GH, options waitCIOptions, reference, sha string, progress func(string),
+	language i18n.Language,
+) waitci.Outcome {
+	return adapters.watch(&waitci.Waiter{
 		Fetch:        func() (waitci.Snapshot, error) { return gh.Fetch(reference) },
 		SHA:          sha,
 		Interval:     options.interval,
@@ -313,7 +334,31 @@ func runWaitCI(args []string, stdout, stderr io.Writer) int {
 		Progress:     progress,
 		Language:     language,
 	})
-	return reportWaitCI(language, outcome, detached, options.allChecks, say, finish)
+}
+
+// resolveOrReport は commit から PR を探す。PR が無いときは skipID、失敗したときは failID の結論を出し、
+// done を真にして終了コードを返す。data は結論の差し込みに足す値である。
+func resolveOrReport(
+	resolve func() (string, error), skipID, failID string, data map[string]any,
+	verdict func(string, map[string]any), finish func(code, failed, total int) int,
+) (number string, code int, done bool) {
+	number, err := resolve()
+	if err == nil {
+		return number, 0, false
+	}
+	fields := map[string]any{}
+	for key, value := range data {
+		fields[key] = value
+	}
+	var noPR *waitci.NoPullRequestError
+	if errors.As(err, &noPR) {
+		fields["Reason"] = noPR.Message
+		verdict(skipID, fields)
+		return "", finish(0, 0, 0), true
+	}
+	fields["Error"] = waitci.DisplayMessage(err)
+	verdict(failID, fields)
+	return "", finish(4, 0, 0), true
 }
 
 // reportWaitCI は監視の結果を結論・警告・明細の順に出し、終了コードを返す。

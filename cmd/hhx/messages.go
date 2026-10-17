@@ -53,20 +53,24 @@ const (
 	idToolRequired   = "wait-ci.tool-required"
 	idSkippedNoPR    = "wait-ci.skipped-no-pr"
 	idDetachedFailed = "wait-ci.detached-lookup-failed"
-	idNoPRFor        = "wait-ci.no-pr-for"
-	idTargetBranch   = "wait-ci.target.branch"
-	idTargetCommit   = "wait-ci.target.commit"
-	idGHKeptFailing  = "wait-ci.gh-kept-failing"
-	idUnknownHead    = "wait-ci.unknown-head"
-	idHeadTimeout    = "wait-ci.head-timeout"
-	idConflictNoRun  = "wait-ci.conflict-no-checks"
-	idNoCI           = "wait-ci.no-ci"
-	idMainNoPR       = "wait-ci.main-no-pr"
-	idEmptyTimeout   = "wait-ci.empty-timeout"
-	idTimeout        = "wait-ci.timeout"
-	idFailed         = "wait-ci.failed"
-	idAllPassed      = "wait-ci.all-passed"
-	idConflicting    = "wait-ci.conflicting"
+	// 別名のブランチへ push した後などで、ブランチ名でも commit でも PR が見つからなかった。
+	idSkippedNoPRBranch = "wait-ci.skipped-no-pr-branch"
+	// ブランチ名で PR が見つからず、commit から探し直す gh の呼び出しが失敗した。
+	idCommitLookupFailed = "wait-ci.commit-lookup-failed"
+	idNoPRFor            = "wait-ci.no-pr-for"
+	idTargetBranch       = "wait-ci.target.branch"
+	idTargetCommit       = "wait-ci.target.commit"
+	idGHKeptFailing      = "wait-ci.gh-kept-failing"
+	idUnknownHead        = "wait-ci.unknown-head"
+	idHeadTimeout        = "wait-ci.head-timeout"
+	idConflictNoRun      = "wait-ci.conflict-no-checks"
+	idNoCI               = "wait-ci.no-ci"
+	idMainNoPR           = "wait-ci.main-no-pr"
+	idEmptyTimeout       = "wait-ci.empty-timeout"
+	idTimeout            = "wait-ci.timeout"
+	idFailed             = "wait-ci.failed"
+	idAllPassed          = "wait-ci.all-passed"
+	idConflicting        = "wait-ci.conflicting"
 )
 
 var messages = i18n.Register(i18n.Catalog{
@@ -264,8 +268,8 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "この時間を過ぎても check が無ければ、repo に CI があるかを調べる（秒）",
 	},
 	idFlagPRLookup: {
-		EN: "limit for finding the PR of a detached HEAD commit (seconds)",
-		JA: "detached HEAD の commit の PR を探す上限（秒）",
+		EN: "limit for finding the PR of the HEAD commit when detached or the branch has no PR (seconds)",
+		JA: "detached HEAD やブランチに PR が無いときに、HEAD の commit の PR を探す上限（秒）",
 	},
 	idFlagProgress:  {EN: "print progress on every poll to stderr", JA: "poll のたびに進捗を stderr に出す"},
 	idFlagAllChecks: {EN: "list passing checks too (default: failures only)", JA: "成功した check も並べる（既定は失敗だけ）"},
@@ -273,7 +277,22 @@ var messages = i18n.Register(i18n.Catalog{
 	// 以下は wait-ci の結論の行の本文。`wait-ci: ` の後ろに続く。
 	idIntervalTooLow: {EN: "--interval must be 1 or more", JA: "--interval は 1 以上"},
 	idToolRequired:   {EN: "{{.Tool}} is required", JA: "{{.Tool}} が必要"},
-	idSkippedNoPR:    {EN: "{{.Reason}}; skipped watching", JA: "{{.Reason}}。監視をスキップした"},
+	// PR があるのに見つけられなかった場合に、引数で PR を指定し直せることを伝える。
+	// 引数を渡すと監視対象の SHA が既定で HEAD にならず古い head の結果を拾い得るので、--sha HEAD も添えさせる。
+	idSkippedNoPR: {
+		EN: "{{.Reason}}; skipped watching. If the PR exists, run `hhx wait-ci --progress --sha HEAD <PR number or branch>`",
+		JA: "{{.Reason}}。監視をスキップした。PR がある場合は `hhx wait-ci --progress --sha HEAD <PR 番号かブランチ名>` を実行する",
+	},
+	idSkippedNoPRBranch: {
+		EN: "branch {{.Branch}} has no PR, and {{.Reason}}; skipped watching. " +
+			"If the PR exists, run `hhx wait-ci --progress --sha HEAD <PR number or branch>`",
+		JA: "branch {{.Branch}} に PR が無く、{{.Reason}}。監視をスキップした。" +
+			"PR がある場合は `hhx wait-ci --progress --sha HEAD <PR 番号かブランチ名>` を実行する",
+	},
+	idCommitLookupFailed: {
+		EN: "branch {{.Branch}} has no PR, and resolving the PR of the HEAD commit failed: {{.Error}}",
+		JA: "branch {{.Branch}} に PR が無く、HEAD の commit の PR 解決にも失敗した: {{.Error}}",
+	},
 	idDetachedFailed: {
 		EN: "failed to resolve the PR of the detached HEAD: {{.Error}}",
 		JA: "detached HEAD の PR 解決に失敗した: {{.Error}}",
