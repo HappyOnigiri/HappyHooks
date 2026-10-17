@@ -36,11 +36,15 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "この workflow dispatch が成功したら、",
 	},
 	// push・PR 作成の後は wait-ci で CI の完了まで待たせる。終了コードを失わないこと、失敗は直して追うことも伝える。
+	// detached HEAD や別名のブランチへの push でも PR を探せるので、引数を足したり別の手段で待ったりさせない。
 	idGuidance: {
-		EN: "Run `{{.Command}}` with no arguments and wait until it finishes in this turn. pending / settling means " +
+		EN: "Run `{{.Command}}` with no arguments and wait until it finishes in this turn. This also works on a " +
+			"detached HEAD and after pushing to a branch whose name differs from the local one, because it finds the PR " +
+			"from the HEAD commit; do not wait some other way. pending / settling means " +
 			"not finished. Do not lose the exit code through a pipe; for exit 0, tell success from a skip by the verdict " +
 			"line. On failure, fix the cause, push again, and follow it until CI completes.\n{{.Order}}",
-		JA: "`{{.Command}}` を引数なしで実行し、このターンで終了まで待つ。pending / settling は未完了。" +
+		JA: "`{{.Command}}` を引数なしで実行し、このターンで終了まで待つ。detached HEAD でも、ローカルと違う名前のブランチへ " +
+			"push した後でも、HEAD の commit から PR を探すのでそのまま使い、別の手段で待たない。pending / settling は未完了。" +
 			"パイプで終了コードを失わず、exit 0 は成功とスキップを結論行で区別する。失敗は原因を直して再pushし、CI完了まで追跡する。\n" +
 			"{{.Order}}",
 	},
