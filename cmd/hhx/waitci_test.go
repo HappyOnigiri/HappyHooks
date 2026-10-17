@@ -18,8 +18,10 @@ type scriptedRunner struct {
 	branch   string
 	head     string
 	mainHead string
-	gh       map[string][]waitci.Result
-	calls    []string
+	// pushed は refs/remotes/origin/<branch> の commit。空ならそのブランチは同じ名前で push されていない。
+	pushed string
+	gh     map[string][]waitci.Result
+	calls  []string
 }
 
 func (s *scriptedRunner) Run(name string, args []string, _ time.Duration) (waitci.Result, error) {
@@ -36,6 +38,8 @@ func (s *scriptedRunner) Run(name string, args []string, _ time.Duration) (waitc
 			return ok(s.head)
 		case args[0] == "rev-parse" && args[1] == "refs/remotes/origin/main" && s.mainHead != "":
 			return ok(s.mainHead)
+		case args[0] == "rev-parse" && args[1] == "--verify" && args[3] == "refs/remotes/origin/"+s.branch && s.pushed != "":
+			return ok(s.pushed)
 		case args[0] == "symbolic-ref" && s.branch != "":
 			return ok(s.branch)
 		}
@@ -243,6 +247,84 @@ func TestWaitCIReportsAFailedDetachedLookup(t *testing.T) {
 	installFakeWaitCI(t, fake)
 	code, stdout, _ = runCommand(t, "", "wait-ci", "--any-sha")
 	if code != 4 || !strings.HasPrefix(lines(stdout)[0], "wait-ci: "+messages.Text(testLanguage, idDetachedFailed, map[string]any{"Error": ""})) {
+		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+}
+
+// --- ブランチ名で PR が見つからないときの commit からの探し直し ---
+
+// renamedPushRunner は、ローカルのブランチ work と違う名前のリモートブランチへ HEAD を push した状態を返す。
+func renamedPushRunner(gh map[string][]waitci.Result) *scriptedRunner {
+	gh["gh pr view --json"] = []waitci.Result{{Code: 1, Stderr: "no pull requests found for branch \"work\""}}
+	return &scriptedRunner{repo: true, branch: "work", head: strings.Repeat("B", 40), gh: gh}
+}
+
+func TestWaitCIFindsThePRByCommitAfterAPushUnderAnotherName(t *testing.T) {
+	// `git push origin HEAD:<別名>` の後。ブランチ名で見つからなくても、push した commit の PR を監視する。
+	view := `{"headRefOid":"` + strings.Repeat("B", 40) + `","mergeable":"MERGEABLE","statusCheckRollup":[` +
+		`{"__typename":"CheckRun","workflowName":"CI","name":"test","status":"COMPLETED","conclusion":"SUCCESS",` +
+		`"startedAt":"2026-09-09T23:20:01Z","completedAt":"2026-09-09T23:21:31Z"}]}`
+	fake := &fakeWaitCI{runner: renamedPushRunner(map[string][]waitci.Result{
+		"gh pr list --search " + strings.Repeat("B", 40): {{Stdout: "994\n"}},
+		"gh pr view 994 --json":                          {{Stdout: view}},
+	})}
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci", "--settle", "20", "--interval", "10")
+	if code != 0 || lines(stdout)[0] != "wait-ci: "+messages.Text(testLanguage, idAllPassed, map[string]any{"Total": 1}) ||
+		fake.watched != 2 || fake.waiter.SHA != strings.Repeat("B", 40) {
+		t.Fatalf("code=%d stdout=%q watched=%d sha=%q", code, stdout, fake.watched, fake.waiter.SHA)
+	}
+}
+
+func TestWaitCIDoesNotLookUpTheCommitOfABranchPushedUnderItsOwnName(t *testing.T) {
+	// 同じ名前で push 済みなら PR がまだ無いだけなので、commit の検索で待たずにスキップする。
+	fake := &fakeWaitCI{runner: renamedPushRunner(map[string][]waitci.Result{})}
+	fake.runner.pushed = fake.runner.head
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci", "--interval", "1")
+	want := []string{
+		"wait-ci: " + messages.Text(testLanguage, idNoPRFor, map[string]any{"Target": messages.T(testLanguage, idTargetBranch)}),
+		"wait-ci: exit=0 failed=0 total=0",
+	}
+	if code != 0 || !reflect.DeepEqual(lines(stdout), want) || fake.clock.slept != 0 {
+		t.Fatalf("code=%d stdout=%q slept=%v", code, stdout, fake.clock.slept)
+	}
+	for _, call := range fake.runner.calls {
+		if strings.HasPrefix(call, "gh pr list") {
+			t.Fatalf("unexpected lookup: %s", call)
+		}
+	}
+	// 引数で PR を指定したときも探し直さない。
+	fake = &fakeWaitCI{runner: renamedPushRunner(map[string][]waitci.Result{}), outcome: &waitci.Outcome{Status: waitci.StatusNoPR}}
+	installFakeWaitCI(t, fake)
+	if code, _, _ := runCommand(t, "", "wait-ci", "work"); code != 0 || fake.watched != 1 {
+		t.Fatalf("code=%d watched=%d", code, fake.watched)
+	}
+}
+
+func TestWaitCISkipsWhenNeitherTheBranchNorTheCommitHasAPR(t *testing.T) {
+	fake := &fakeWaitCI{runner: renamedPushRunner(map[string][]waitci.Result{"gh pr list --search": {{Stdout: ""}}})}
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci", "--interval", "1", "--pr-lookup-timeout", "0")
+	want := []string{
+		"wait-ci: " + messages.Text(testLanguage, idSkippedNoPRBranch,
+			map[string]any{"Branch": "work", "Reason": noPRMessage(strings.Repeat("B", 40))}),
+		"wait-ci: exit=0 failed=0 total=0",
+	}
+	if code != 0 || !reflect.DeepEqual(lines(stdout), want) || fake.watched != 1 {
+		t.Fatalf("code=%d stdout=%q watched=%d", code, stdout, fake.watched)
+	}
+}
+
+func TestWaitCIReportsAFailedCommitLookupAfterTheBranch(t *testing.T) {
+	fake := &fakeWaitCI{runner: renamedPushRunner(map[string][]waitci.Result{
+		"gh pr list --search": {{Code: 1, Stderr: "could not resolve to a Repository"}},
+	})}
+	installFakeWaitCI(t, fake)
+	code, stdout, _ := runCommand(t, "", "wait-ci")
+	first := "wait-ci: " + messages.Text(testLanguage, idCommitLookupFailed,
+		map[string]any{"Branch": "work", "Error": "could not resolve to a Repository"})
+	if code != 4 || lines(stdout)[0] != first {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
 	}
 }
