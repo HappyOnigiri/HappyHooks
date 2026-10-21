@@ -1,6 +1,6 @@
 module github.com/HappyOnigiri/hhx
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/spf13/pflag v1.0.10
