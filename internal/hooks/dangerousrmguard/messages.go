@@ -28,6 +28,7 @@ const (
 	idHowCmdsubGlob      = "dangerous-rm-guard.how.substitution-glob"
 	idHowInlineUnchecked = "dangerous-rm-guard.how.inline-shell-unchecked"
 	idHowInlineValue     = "dangerous-rm-guard.how.inline-shell-value"
+	idHowUnparsed        = "dangerous-rm-guard.how.unparsed-expansion"
 
 	idWhyEmptyVar        = "dangerous-rm-guard.why.empty-variable"
 	idWhyDerived         = "dangerous-rm-guard.why.derived-variable"
@@ -42,6 +43,7 @@ const (
 	idWhyAncestor        = "dangerous-rm-guard.why.ancestor"
 	idWhyInlineUnchecked = "dangerous-rm-guard.why.inline-shell-unchecked"
 	idWhyInlineValue     = "dangerous-rm-guard.why.inline-shell-value"
+	idWhyUnparsed        = "dangerous-rm-guard.why.unparsed-expansion"
 
 	// 発火した分岐ごとの対象の表記。テストはこれでどの分岐が発火したかを見る。
 	idUnresolvable    = "dangerous-rm-guard.target.unresolvable"
@@ -53,6 +55,7 @@ const (
 	idTooMany         = "dangerous-rm-guard.target.too-many-substitutions"
 	idInlineUnchecked = "dangerous-rm-guard.target.inline-shell-unchecked"
 	idInlineValue     = "dangerous-rm-guard.target.inline-shell-value"
+	idUnparsed        = "dangerous-rm-guard.target.unparsed-expansion"
 )
 
 var messages = i18n.Register(i18n.Catalog{
@@ -273,6 +276,28 @@ var messages = i18n.Register(i18n.Catalog{
 			"検出を外すためだけに文字を挟む書き方は、空の値の危険がそのまま残るので禁止です。",
 	},
 
+	// REWRITE: 組み込みのパーサーが読み切れない `${…}`。bash でも読める形に書き直させ、ファイルや別のシェルへ移す形を禁じる。
+	idHowUnparsed: {
+		EN: "{{.NoAsk}} Rewrite the command without zsh-only expansions, in a form bash can also read.\n" +
+			"  1. Replace zsh parameter flags such as `${(f)\"$(cmd)\"}` or `${(M)FILES:#*.rb}`, and nested forms such as " +
+			"`${${x}}`, with plain command substitution or pipes " +
+			"(e.g. `for f in $(cmd); do ...; done`, `cmd | grep -E '\\.rb$' | xargs ...`, " +
+			"or write the list to a file and read it with `while read -r f; do ...; done < \"$S/files.txt\"`)\n" +
+			"  2. Use only standard forms inside `${...}`: a name, an index such as `${FILES[@]}`, " +
+			"and operators such as `${x:-default}`, `${x#prefix}`, `${x/a/b}`\n" +
+			"Moving the command into a script file, `zsh -c '...'`, or `eval` only to dodge the check is forbidden, " +
+			"because it hides the command from the check without making it any safer.",
+		JA: "{{.NoAsk}}zsh にしか無い展開を使わず、bash でも読める形に書き直してください。\n" +
+			"  1. `${(f)\"$(cmd)\"}` や `${(M)FILES:#*.rb}` のような zsh のパラメータフラグ、`${${x}}` のような入れ子を、" +
+			"ふつうのコマンド置換やパイプに置き換える" +
+			"（例: `for f in $(cmd); do ...; done`、`cmd | grep -E '\\.rb$' | xargs ...`、" +
+			"一覧をファイルに書き出して `while read -r f; do ...; done < \"$S/files.txt\"` で読む）\n" +
+			"  2. `${...}` の中には標準の形だけを書く: 名前、`${FILES[@]}` のような添字、" +
+			"`${x:-既定値}`・`${x#接頭辞}`・`${x/a/b}` のような演算子\n" +
+			"検出を外すためだけにコマンドをスクリプトファイル・`zsh -c '...'`・`eval` へ移す書き方は、" +
+			"安全にならないまま検査から隠すだけなので禁止です。",
+	},
+
 	// 以下は各分岐の理由。なぜ静的に安全と判定できないか、または消すと何が起きるかを書く。
 	idWhyEmptyVar: {
 		EN: "The target starts with `$variable/`, so when the variable is undefined or empty the target turns into " +
@@ -362,6 +387,15 @@ var messages = i18n.Register(i18n.Catalog{
 			"その値が空なら、rm がルートやホームディレクトリに届きます。",
 	},
 
+	idWhyUnparsed: {
+		EN: "Claude Code's shell parser cannot read this `${...}` (zsh parameter flags or nested expansions), " +
+			"so it cannot rule out a dangerous rm in the command, even if the command contains no rm. " +
+			"Claude Code asks for confirmation for this even in bypass mode.",
+		JA: "この `${...}`（zsh のパラメータフラグや入れ子の展開）は Claude Code のシェルの解析器が読み切れないため、" +
+			"コマンドに rm が無くても、危険な rm が無いことを確かめられません。" +
+			"Claude Code は bypass でもこれを確認ダイアログにします。",
+	},
+
 	// 対象の表記。{{.Command}} は rm か rmdir である。
 	idUnresolvable: {EN: "a deletion target that cannot be resolved statically", JA: "静的に解決できない削除対象"},
 	idCritical:     {EN: "deleting a critical system directory", JA: "システム重要ディレクトリの削除"},
@@ -378,6 +412,7 @@ var messages = i18n.Register(i18n.Catalog{
 		EN: "{{.Command}} in a shell -c script on a value known only when it runs",
 		JA: "シェルの -c のスクリプトの中の、実行時にしか分からない値を対象にした {{.Command}}",
 	},
+	idUnparsed: {EN: "an expansion that Claude Code cannot parse", JA: "Claude Code が解析できない展開"},
 })
 
 // finding は発火した分岐である。target・why・how はカタログの ID で、command は rm か rmdir、

@@ -20,4 +20,10 @@ with positional arguments replaced by their literal values. Setting `CLAUDE_CODE
 turns off this check in both Claude Code and the hook. Claude Code can also turn the check off with a server-side
 feature flag that the hook cannot see; in that case only the hook denies.
 
+Expansions that Claude Code's shell parser cannot read follow v2.1.309. Claude Code asks for confirmation when its
+parser cannot read a command, even without `rm` in it. The hook denies the form seen in practice: zsh-only syntax right
+after `${`, such as the parameter flags in `${(f)"$(cmd)"}` and `${(M)FILES:#*.rb}`, nested forms such as `${${x}}`,
+and subscript flags such as `${x[(r)pat]}`. Inside single quotes, `$'...'`, comments, and quoted heredocs, `${` is not
+an expansion and is left alone. Other forms that Claude Code's parser cannot read are not covered.
+
 Other checks may differ from newer versions.

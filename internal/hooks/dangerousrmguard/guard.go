@@ -10,7 +10,8 @@
 //
 // 方針:
 //   - 基本の判定は Claude Code v2.1.239 の組み込みのロジックを移植した。先行代入から派生した変数の削除は
-//     v2.1.283 の判定を、shell -c のスクリプトの検査は v2.1.296 の判定を移した（ファイル末尾の節）。
+//     v2.1.283 の判定を、shell -c のスクリプトの検査は v2.1.296 の判定を、読み切れない `${…}` の検査は
+//     v2.1.309 の判定を移した（ファイル末尾の節）。
 //     その他の新しい分岐への追従は未確認である。
 //   - 理由文は REWRITE と REPORT の 2 系統に分ける（messages.go）。REWRITE の案内には「ガードが働く形」だけを書く。
 //     `"$BASE/x$name"` のように 1 文字挟んで正規表現を外す迂回を案内すると、安全性を上げずに検出だけ消えるので明示的に禁じる。
@@ -26,6 +27,7 @@
 //	on working directory or its ancestor        → REPORT   (MF。cwd と一致する場合だけ REWRITE)
 //	shell -c script ... could not be checked    → REWRITE  (v2.1.296 の Fcn / Lwe)
 //	in a shell -c script, on a target built ... → REWRITE  (v2.1.296 の HTr。中身は上の各分岐で判定する)
+//	the shell may read it differently ...       → REWRITE  (v2.1.309 の bKe。`${` の直後を読み切れない形だけ)
 //
 // 組み込みは "statically-unresolvable" の 3 分岐に別々の理由文を持たせているので、こちらも分けて出す
 // （cd で基準が不定 / 対象の形が上へ広がる / glob が複数階層）。1 本にまとめると、`cd tmp && rm -rf ./*` の正解である
@@ -90,11 +92,13 @@ func Definition() hookrt.Definition {
 	}
 }
 
-// gate は一次ゲートである。rm を含む入力と、シェルの -c らしき入力（`sh` と `-…c` の両方を含む）を判定する。
-// 後者は v2.1.296 の shell -c スクリプトの検査が、rm の語の無いスクリプトでも ask を出すためである。
+// gate は一次ゲートである。rm を含む入力、シェルの -c らしき入力（`sh` と `-…c` の両方を含む）、`${` を含む入力を判定する。
+// 後の 2 つは、v2.1.296 の shell -c スクリプトの検査と v2.1.309 の読み切れない `${…}` の検査が、
+// rm の語の無いコマンドでも ask を出すためである。
 func gate(input []byte) bool {
 	text := string(input)
-	return strings.Contains(text, "rm") || (strings.Contains(text, "sh") && inlineGateRE.MatchString(text))
+	return strings.Contains(text, "rm") || (strings.Contains(text, "sh") && inlineGateRE.MatchString(text)) ||
+		strings.Contains(text, "${")
 }
 
 func run(c *hookrt.Context) error {
@@ -115,6 +119,12 @@ func run(c *hookrt.Context) error {
 	found, err := evaluateAt(command, py.Normpath(cwd), 0)
 	if err != nil {
 		return err
+	}
+	if found.target == "" {
+		// 組み込みは rm の分岐を先に見て、どれにも当たらなければこの ask を出す。最上位のコマンドだけが対象である。
+		if token := findUnparsedExpansion(command); token != "" {
+			found = finding{target: idUnparsed, token: token, why: idWhyUnparsed, how: idHowUnparsed}
+		}
 	}
 	if found.target != "" {
 		c.Deny(reason(c.Language(), found))
@@ -1639,4 +1649,446 @@ func findInlineShell(command, cwd string, depth int) (finding, error) {
 		return result, nil
 	}
 	return finding{}, nil
+}
+
+// --- Claude Code v2.1.309 の「シェルが別の読み方をし得る」の検査からの移植 ---------------------
+//
+// v2.1.309 は、組み込みのパーサー（tree-sitter ではなく JS で書いた bash の再実装）の結果の根が ERROR になると、
+// rm が無くても dangerousRemoval の ask にする（`bKe` の too-complex の分岐。"This command could not be checked
+// for dangerous rm operations: the shell may read it differently than it was parsed."）。
+// 最上位のコマンドだけが対象で、shell -c の中の再帰検査では出ない。
+//
+// 根が ERROR になるのは、解析の途中で zshBraceDiff・zshCondParenDiff・keywordDesync のどれかが立ったときである。
+// 立てる箇所は 30 近くあるが、移したのは `${` の直後の文法（`Pe`）が読み切れず、続く文字が `}` でない箇所だけである。
+// 過去の Bash のコマンド 47,774 件を組み込みのパーサーに通すと、根が ERROR になった 16 件はすべてこの箇所だった
+// （`${(f)"$(…)"}`・`${(M)FILES:#*.rb}` のような zsh のパラメータフラグ）。
+//
+// 移植していない条件（組み込みでは ask になるが、ここでは通す）:
+//   - `${` の後ろの演算子（`:-`・`/`・`#` など）より後ろの読み方。`${x:-{a}}` の `{` などでも根が ERROR になる。
+//   - 配列の要素・パターン・クォートの走査の中の `$(`・`` ` ``・`{`、閉じない `$(`、`$\` と改行、
+//     `[[(`（zshCondParenDiff）、代入やリダイレクトの直後の予約語（keywordDesync。`FOO=1 if …`）。
+//
+// 組み込みとずれ得る点: 組み込みは解析が時間の上限（50ms）を超えると打ち切り、この分岐に来ない。ここでは長さによらず止める。
+
+// 走査の文脈。
+const (
+	scanCode     = iota // クォートの外（最上位・`$(…)`・バッククォート）
+	scanSubshell        // クォートの外の `(…)`（閉じ括弧で `$(` を閉じないように数える）
+	scanBrace           // クォートの外の `${…}` の中
+	scanDquote          // ダブルクォートの中
+	scanBraceDQ         // ダブルクォートの中の `${…}` の中（シングルクォートは文字として読む）
+	scanHeredoc         // クォートしない heredoc の本文（クォートは文字で、`$`・`\`・バッククォートだけが働く）
+)
+
+// scanFrame は走査の文脈の 1 段である。backtick ならバッククォートで閉じるコマンド置換である。
+type scanFrame struct {
+	mode     int
+	backtick bool
+}
+
+// findUnparsedExpansion は、組み込みのパーサーが読み切れない `${…}` を探し、その `${` からの表記を返す（無ければ空）。
+// `${` を展開として読む文脈（クォートの外・ダブルクォートの中・コマンド置換・クォートしない heredoc の本文）だけを見る。
+// シングルクォート・`$'…'`・コメント・クォートした heredoc の本文の中は見ない。クォートが閉じない入力は判定しない。
+func findUnparsedExpansion(command string) string {
+	if !strings.Contains(command, "${") {
+		return ""
+	}
+	return scanExpansions(command, scanCode)
+}
+
+// expansionScanner は scanExpansions の走査の状態である。
+type expansionScanner struct {
+	command   string
+	found     string // 最初に見つけた読み切れない `${` の表記
+	stack     []scanFrame
+	pending   []heredocMarker // 行末で本文を読む heredoc
+	wordStart bool            // 直前が語の区切りか（`#` をコメントとして読むか）
+}
+
+// scanExpansions は base の文脈から command を走査し、最初に読み切れない `${` の表記を返す。
+// 見つけても末尾まで走査し、閉じない heredoc やクォートがあれば判定しない（空を返す）。
+func scanExpansions(command string, base int) string {
+	s := &expansionScanner{command: command, stack: []scanFrame{{mode: base}}, wordStart: true}
+	for i := 0; i < len(command); i++ {
+		next, ok := s.step(i)
+		if !ok {
+			return ""
+		}
+		i = next
+	}
+	if len(s.pending) > 0 {
+		return "" // 本文の無い heredoc も閉じていない
+	}
+	return s.found
+}
+
+func (s *expansionScanner) push(mode int) { s.stack = append(s.stack, scanFrame{mode: mode}) }
+
+func (s *expansionScanner) pop() {
+	if len(s.stack) > 1 {
+		s.stack = s.stack[:len(s.stack)-1]
+	}
+}
+
+// step は位置 i の 1 文字（または 1 つの字句）を読み、最後に読んだ位置を返す。判定をやめるなら ok は false である。
+func (s *expansionScanner) step(i int) (last int, ok bool) {
+	command := s.command
+	top := s.stack[len(s.stack)-1]
+	c := command[i]
+	switch {
+	case c == '\\':
+		s.wordStart = false
+		return i + 1, true
+	case c == '$' && i+1 < len(command) && command[i+1] == '{':
+		if s.found == "" && !expansionHeadParses(command, i+2) {
+			s.found = expansionShown(command, i)
+		}
+		if top.mode >= scanDquote {
+			s.push(scanBraceDQ)
+		} else {
+			s.push(scanBrace)
+		}
+		s.wordStart = false
+		return i + 1, true
+	case c == '$' && i+1 < len(command) && command[i+1] == '(':
+		s.push(scanCode)
+		s.wordStart = true
+		return i + 1, true
+	case c == '$' && i+1 < len(command) && command[i+1] == '\'' && top.mode < scanDquote:
+		s.wordStart = false
+		return skipANSIC(command, i+2), true
+	case c == '`':
+		if top.backtick {
+			s.pop()
+		} else {
+			s.stack = append(s.stack, scanFrame{mode: scanCode, backtick: true})
+		}
+		s.wordStart = true
+		return i, true
+	}
+	switch top.mode {
+	case scanHeredoc:
+	case scanDquote:
+		if c == '"' {
+			s.pop()
+		}
+	case scanBraceDQ:
+		switch c {
+		case '"':
+			s.push(scanDquote)
+		case '}':
+			s.pop()
+		}
+	default:
+		last, ok = s.stepUnquoted(i, top)
+		s.wordStart = strings.IndexByte(" \t\n;&|()<>", c) >= 0
+		return last, ok
+	}
+	return i, true
+}
+
+// stepUnquoted はクォートの外（scanCode・scanSubshell・scanBrace）の 1 文字を読む。
+func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool) {
+	command := s.command
+	c := command[i]
+	inBrace := top.mode == scanBrace
+	switch {
+	case c == '\'':
+		end := strings.IndexByte(command[i+1:], '\'')
+		if end < 0 {
+			return i, false
+		}
+		return i + end + 1, true
+	case c == '"':
+		s.push(scanDquote)
+	case c == '}' && inBrace:
+		s.pop()
+	case inBrace:
+	case c == '(':
+		s.push(scanSubshell)
+	case c == ')' && !top.backtick:
+		s.pop()
+	case c == '#' && s.wordStart:
+		if end := strings.IndexByte(command[i:], '\n'); end >= 0 {
+			return i + end - 1, true
+		}
+		return len(command) - 1, true
+	case strings.HasPrefix(command[i:], "<<<"):
+		return i + 2, true // here-string は heredoc ではない
+	case strings.HasPrefix(command[i:], "<<"):
+		marker, next := readHeredocMarker(command, i+2)
+		if marker.delimiter != "" {
+			s.pending = append(s.pending, marker)
+		}
+		return next - 1, true
+	case c == '\n' && len(s.pending) > 0:
+		return s.readHeredocBodies(i)
+	}
+	return i, true
+}
+
+// readHeredocBodies は改行（i）の後ろに続く heredoc の本文を順に読み、最後の区切りの行の末尾の手前を返す。
+func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
+	next := i + 1
+	for _, marker := range s.pending {
+		var body string
+		var closed bool
+		body, next, closed = heredocBody(s.command, next, marker)
+		if !closed {
+			// 区切りの行で閉じない heredoc は、組み込みのパーサーが解析を打ち切ることがある（その場合は ask にならない）。
+			return i, false
+		}
+		if !marker.quoted && s.found == "" {
+			s.found = scanExpansions(body, scanHeredoc)
+		}
+	}
+	s.pending = nil
+	return next - 1, true
+}
+
+// expansionHeadParses は組み込みの `Pe` のうち、`${` の直後（i）から名前と添字までを読み、続く文字で `}` に届くかを返す。
+// 演算子（`:`・`#`・`%`・`/`・`^`・`,`・`-`・`=`・`?`・`+`）が続けば、その後ろは読み切れるものとみなす（通す側）。
+// 添字の `]` が見つからないときも通す側に倒す。
+func expansionHeadParses(command string, i int) bool {
+	at := func(offset int) byte {
+		if i+offset < len(command) {
+			return command[i+offset]
+		}
+		return 0
+	}
+	isNameStart := func(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' }
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	isNameChar := func(c byte) bool { return isNameStart(c) || isDigit(c) }
+	// 組み込みの `x`: 空白・タブ・CR と、バックスラッシュと改行を飛ばす。
+	skipBlanks := func() {
+		for {
+			switch {
+			case at(0) == ' ' || at(0) == '\t' || at(0) == '\r':
+				i++
+			case at(0) == '\\' && at(1) == '\n':
+				i += 2
+			default:
+				return
+			}
+		}
+	}
+	skipBlanks()
+	// `${#!}` と `${!#}`・`${!##}`（`}` の前に空白を 1 つまで挟める）は特別な形として読む。
+	if at(0) == '#' && at(1) == '!' && at(2) == '}' {
+		return true
+	}
+	if at(0) == '!' && at(1) == '#' {
+		offset := 2
+		if at(offset) == '#' {
+			offset++
+		}
+		if at(offset) == ' ' {
+			offset++
+		}
+		if at(offset) == '}' {
+			return true
+		}
+	}
+	if at(0) == '#' {
+		i++
+	}
+	if c := at(0); (c == '!' || c == '=' || c == '~') && (isNameStart(at(1)) || isDigit(at(1))) {
+		i++
+	}
+	skipBlanks()
+	switch c := at(0); {
+	case isNameStart(c):
+		for isNameChar(at(0)) {
+			i++
+		}
+	case isDigit(c):
+		for isDigit(at(0)) {
+			i++
+		}
+	case c != 0 && strings.IndexByte("?$@*#-!_", c) >= 0:
+		i++
+	}
+	if at(0) == '[' {
+		// zsh の添字フラグ（`${x[(r)pat]}`）。組み込みは `(…)` の後ろに `]` 以外が続く添字を読み切れない。
+		open := i + 1
+		for open < len(command) && (command[open] == ' ' || command[open] == '\t') {
+			open++
+		}
+		if open+1 < len(command) && command[open] == '(' && command[open+1] != '(' {
+			window := command[open:min(len(command), open+maxSubscript)]
+			if end := strings.IndexByte(window, ')'); end >= 0 && open+end+1 < len(command) &&
+				command[open+end+1] != ']' {
+				return false
+			}
+		}
+		end := subscriptEnd(command, i+1)
+		if end < 0 {
+			return true
+		}
+		i = end + 1
+	}
+	skipBlanks()
+	if c := at(0); (c == '*' || c == '@') && at(1) == '}' {
+		return true
+	}
+	if at(0) == '@' && isNameStart(at(1)) {
+		i++
+		for isNameChar(at(0)) {
+			i++
+		}
+	} else if c := at(0); c != 0 && strings.IndexByte(":#%/^,-=?+", c) >= 0 {
+		return true
+	}
+	for at(0) == '\n' {
+		i++
+	}
+	return at(0) == '}'
+}
+
+// maxSubscript は添字を読む長さの上限である。`${x[` を繰り返す入力で走査が入力の長さの 2 乗にならないようにする。
+// 上限までに `]` が無ければ通す側に倒す。
+const maxSubscript = 256
+
+// subscriptEnd は添字の `[` の直後（i）から、対応する `]` の位置を返す（無ければ -1）。クォートとエスケープを飛ばす。
+func subscriptEnd(command string, i int) int {
+	depth := 0
+	for limit := min(len(command), i+maxSubscript); i < limit; i++ {
+		switch command[i] {
+		case '\\':
+			i++
+		case '\'', '"':
+			end := strings.IndexByte(command[i+1:limit], command[i])
+			if end < 0 {
+				return -1
+			}
+			i += end + 1
+		case '[':
+			depth++
+		case ']':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		case '}', '\n':
+			return -1
+		}
+	}
+	return -1
+}
+
+// expansionShown は理由文に添える `${…}` の表記（対応する `}` まで）である。長い展開は先頭だけを見せる。
+func expansionShown(command string, start int) string {
+	const limit = 40
+	end, depth := len(command), 0
+scan:
+	for i := start + 1; i < len(command); i++ {
+		switch command[i] {
+		case '\\':
+			i++
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				end = i + 1
+				break scan
+			}
+		}
+	}
+	if end-start <= limit {
+		return command[start:end]
+	}
+	cut := start + limit
+	for cut > start && !utf8.RuneStart(command[cut]) {
+		cut--
+	}
+	return command[start:cut] + "…"
+}
+
+// skipANSIC は `$'` の直後（i）から、閉じる `'` の位置を返す（閉じなければ末尾）。
+func skipANSIC(command string, i int) int {
+	for ; i < len(command); i++ {
+		switch command[i] {
+		case '\\':
+			i++
+		case '\'':
+			return i
+		}
+	}
+	return len(command)
+}
+
+// heredocMarker は `<<` の区切りの語である。quoted なら本文を展開しない。stripTabs は `<<-` である。
+type heredocMarker struct {
+	delimiter string
+	quoted    bool
+	stripTabs bool
+}
+
+// readHeredocMarker は `<<` の直後（i）から区切りの語を読み、語の直後の位置を返す。
+func readHeredocMarker(command string, i int) (heredocMarker, int) {
+	var marker heredocMarker
+	if i < len(command) && command[i] == '-' {
+		marker.stripTabs = true
+		i++
+	}
+	for i < len(command) && (command[i] == ' ' || command[i] == '\t') {
+		i++
+	}
+	var word strings.Builder
+	for i < len(command) {
+		c := command[i]
+		if c == '\'' || c == '"' {
+			end := strings.IndexByte(command[i+1:], c)
+			if end < 0 {
+				return heredocMarker{}, len(command)
+			}
+			word.WriteString(command[i+1 : i+1+end])
+			marker.quoted = true
+			i += end + 2
+			continue
+		}
+		if c == '\\' && i+1 < len(command) {
+			word.WriteByte(command[i+1])
+			marker.quoted = true
+			i += 2
+			continue
+		}
+		if strings.IndexByte(" \t\n;&|()<>", c) >= 0 {
+			break
+		}
+		word.WriteByte(c)
+		i++
+	}
+	marker.delimiter = word.String()
+	return marker, i
+}
+
+// heredocBody は本文の先頭（i）から区切りの行の手前までを本文として返し、区切りの行の末尾（改行の位置）を返す。
+// 区切りの行が無ければ closed を false にする。
+func heredocBody(command string, i int, marker heredocMarker) (body string, next int, closed bool) {
+	start := i
+	for i <= len(command) {
+		lineEnd := len(command)
+		if end := strings.IndexByte(command[i:], '\n'); end >= 0 {
+			lineEnd = i + end
+		}
+		line := command[i:lineEnd]
+		if marker.stripTabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if line == marker.delimiter {
+			return command[start:i], lineEnd, true
+		}
+		// `EOF; echo` のように区切りの語の後ろに区切り文字が続く行は、組み込みのパーサーの読み方が定まらない
+		// （解析を打ち切ることがある）ので、閉じていない扱いにして判定しない。
+		if rest, ok := strings.CutPrefix(line, marker.delimiter); ok && rest != "" &&
+			strings.IndexByte(" \t;&|()<>", rest[0]) >= 0 {
+			return "", 0, false
+		}
+		if lineEnd == len(command) {
+			break
+		}
+		i = lineEnd + 1
+	}
+	return command[start:], len(command), false
 }
