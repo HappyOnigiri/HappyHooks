@@ -660,6 +660,11 @@ func pathologicalInputs() []struct {
 		{"inline_long_script", "bash -c '" + strings.Repeat("$X; ", 5000) + "'", hooktest.Deny, labelInlineUnchecked},
 		{"inline_many_positional", "bash -c 'echo " + strings.Repeat("$1", 900) + "' _ a", "", ""},
 		{"inline_many_braces", "bash -c 'echo " + strings.Repeat("{a,$b}", 5000) + "'", "", ""},
+		// 読み切れない `${…}` の分岐。閉じない添字を繰り返しても、添字を末尾まで読み直さない。
+		{"unclosed_subscripts", "echo " + strings.Repeat("${x[", 5000), "", ""},
+		{"unclosed_subscript_flags", "echo " + strings.Repeat("${x[(", 5000), "", ""},
+		{"unclosed_subscript_quotes", "echo " + strings.Repeat("${x['", 5000), "", ""},
+		{"many_expansions", strings.Repeat("echo ${x:-y}; ", 5000) + "echo ${(f)x}", hooktest.Deny, labelUnparsed},
 	}
 }
 
@@ -827,6 +832,84 @@ func TestInlineShellGate(t *testing.T) {
 	for input, want := range map[string]bool{
 		`bash -c 'x'`: true, `sh -ec x`: true, `zsh -lc x`: true, `bash script.sh`: false, `echo -c`: false,
 	} {
+		if got := gate([]byte(input)); got != want {
+			t.Errorf("gate(%q)=%v, want %v", input, got, want)
+		}
+	}
+}
+
+// --- 読み切れない `${…}`（Claude Code v2.1.309 の bKe） ---
+//
+// 期待値は v2.1.309 の組み込みのパーサーに通した結果（根が ERROR か）に合わせてある。
+
+var labelUnparsed = messages.T(hooktest.Language, idUnparsed)
+
+// 調査のきっかけになった実物（変更された Ruby のファイルを zsh の配列に読み込む）。org・repo・パスは架空の値に置き換えた。
+const unparsedRealWorld = `S=/tmp/scratchpad; CHANGED_RB=(${(f)"$(gh api repos/acme/app/pulls/1/files --paginate --jq '.[].filename' | grep -E '\.rb$')"}); bundle exec rubocop $CHANGED_RB`
+
+func TestUnparsedExpansion(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelUnparsed,
+		unparsedRealWorld,
+		// zsh のパラメータフラグ・入れ子・添字フラグ。rm の語が無くても止める。
+		`echo ${(f)x}`,
+		`a=(${(M)F:#*.rb})`,
+		`print -l ${(k)m}`,
+		`echo ${ (f)x}`,
+		`echo ${${x}}`,
+		`echo ${$(pwd)}`,
+		`echo ${x[(r)a]}`,
+		`echo ${x[a]b}`,
+		// 展開として読む文脈: ダブルクォート・コマンド置換・バッククォート・here-string・クォートしない heredoc。
+		`echo "${(j:,:)a}"`,
+		`echo $(echo ${(f)x})`,
+		"echo `echo ${(f)x}`",
+		`cat <<< "${(f)x}"`,
+		"cat <<EOF\n${(f)x}\nEOF",
+		// 前に別の展開や cd があっても、後ろにコメントがあっても止める。
+		`echo ${y:-x} ${(f)x}`,
+		`cd /tmp && echo ${(f)x}`,
+		`echo ${(f)x} # tail`,
+	))
+	// 理由文には読み切れない展開を対応する `}` まで添える。
+	reason := reasonOf(t, unparsedRealWorld, "/tmp")
+	if !strings.Contains(reason, `(${(f)"$(gh api repos/acme/app/pulls/1/fi…)`) ||
+		!strings.Contains(reason, messages.T(hooktest.Language, idWhyUnparsed)) {
+		t.Errorf("unparsed reason: %q", reason)
+	}
+	if reason := reasonOf(t, `echo ${(f)x}; echo done`, "/tmp"); !strings.Contains(reason, "(${(f)x})") {
+		t.Errorf("unparsed reason must show the expansion up to its closing brace: %q", reason)
+	}
+	// rm の分岐が先に当たれば、その理由文を出す（組み込みと同じ順）。
+	check(t, hooktest.Deny, denyAll(labelEmptyVar, `rm -rf $D/*; echo ${(f)x}`))
+}
+
+func TestUnparsedExpansionAllowed(t *testing.T) {
+	check(t, "", hooktest.Commands(
+		// bash と zsh の標準の展開は読み切れる。
+		`echo ${x}`, `echo ${x:-$(pwd)}`, `echo ${#x}`, `echo ${!x}`, `echo ${x[@]}`, `echo ${#x[@]}`, `echo ${!x[@]}`,
+		`echo ${x/a/b}`, `echo ${x%%.*}`, `echo ${x#*/}`, `echo ${x^^}`, `echo ${x,,}`, `echo ${x@Q}`, `echo ${x:0:3}`,
+		`echo ${x:t}`, `echo ${~x}`, `echo ${=x}`, `echo ${@}`, `echo ${#}`, `echo ${10}`, `echo ${x[$i]}`, `echo ${x[(r)]}`,
+		`echo ${#!}`, `echo ${!#}`,
+		// 展開として読まない文脈: シングルクォート・$'…'・コメント・エスケープ・クォートした heredoc。
+		`echo '${(f)x}'`, `echo $'${(f)x}'`, `echo x # ${(f)x}`, `# ${(f)x}`, `echo \${(f)x}`,
+		"cat <<'EOF'\n${(f)x}\nEOF", "cat <<\\EOF\n${(f)x}\nEOF", "cat <<\"EOF\"\n${(f)x}\nEOF",
+		// shell -c のスクリプトの中は、外側のパーサーにはシングルクォートの文字列である（最上位だけが対象）。
+		`bash -c 'echo ${(f)x}'`,
+		// 区切りの行で閉じない heredoc は、組み込みのパーサーが解析を打ち切るので判定しない。
+		"cat <<EOF\nx\nEOF; echo ${(f)x}",
+		"cat <<EOF\n${(f)x}",
+		// クォートが閉じない入力は判定しない。
+		`echo '${(f)x}`,
+		// 案内した書き直し先: コマンド置換・パイプ・ファイルからの読み込み・bash の配列。
+		`for f in $(cat "$S/files.txt"); do echo "$f"; done`,
+		`while read -r f; do echo "$f"; done < "$S/files.txt"`,
+		`git diff --name-only | grep -E '\.rb$' | xargs bundle exec rubocop`,
+		`FILES=($(git diff --name-only)); echo "${FILES[@]}"`,
+	))
+}
+
+func TestUnparsedExpansionGate(t *testing.T) {
+	for input, want := range map[string]bool{`echo ${x}`: true, `echo $x`: false, `echo {x}`: false} {
 		if got := gate([]byte(input)); got != want {
 			t.Errorf("gate(%q)=%v, want %v", input, got, want)
 		}
