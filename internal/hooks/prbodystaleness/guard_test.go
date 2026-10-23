@@ -528,6 +528,37 @@ func TestLooseGitHubResponsesFollowPython(t *testing.T) {
 	}
 }
 
+// 現在のタイトルを JSON 文字列として載せ、取れなければ行ごと省く（title は移植元に無い項目なので例外にしない）。
+func TestTitleLine(t *testing.T) {
+	titled := messages.Text(hooktest.Language, idTitle, map[string]any{"Title": `"feat: <メモ> & \"入力\""`})
+	for name, testCase := range map[string]struct {
+		title any
+		want  string
+	}{
+		"string":     {`feat: <メモ> & "入力"`, "\n" + titled},
+		"missing":    {nil, ""},
+		"empty":      {"", ""},
+		"not string": {[]any{"x"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"title": testCase.title})))
+			context, ok := f.run(t, call{})
+			if !ok {
+				t.Fatal("must inject")
+			}
+			prefix := messages.Text(hooktest.Language, idTitle, map[string]any{"Title": ""})
+			if testCase.want == "" {
+				if strings.Contains(context, prefix) {
+					t.Fatalf("must omit the title line:\n%s", context)
+				}
+			} else if !strings.HasSuffix(context, testCase.want) {
+				t.Fatalf("context must end with %q:\n%s", testCase.want, context)
+			}
+		})
+	}
+}
+
 // sixCommitsWithListFirst は、新しい順に並べたとき 6 件目（表示しない位置）に文字列でない見出しが来る commit の並びである。
 // 移植元は表示する 5 件だけを連結するので、例外にならない。
 func sixCommitsWithListFirst() []any {
@@ -724,7 +755,9 @@ func TestMessageFitsTheCodexContextLimit(t *testing.T) {
 	for range maxHeadlines + 3 {
 		headlines = append(headlines, strings.Repeat("h", 120))
 	}
-	pr := map[string]any{"number": json.Number("123456"), "url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
+	// GitHub の PR のタイトルは 256 文字まで。マルチバイトの文字で埋めてバイト数を最大に近づける。
+	pr := map[string]any{"number": json.Number("123456"), "title": strings.Repeat("あ", 256),
+		"url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
 	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
 		// 一覧の遅れの案内を足した文面が最も長い。
 		for _, lagging := range []bool{false, true} {

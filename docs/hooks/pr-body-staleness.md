@@ -5,8 +5,9 @@ English | [日本語](pr-body-staleness.ja.md) · [Hooks](../../README.md#hooks)
 **Default:** On for Claude Code and Codex.
 
 After a successful `git push`, this hook compares the PR body's last edit time with commit dates. If it finds newer
-commits, it asks the agent to check whether the body still describes the changes. A newer commit does not automatically
-mean the body is wrong.
+commits, it asks the agent to check whether the title and body still describe the changes, and shows the current title.
+A newer commit does not automatically mean the body is wrong. Editing only the title does not reset the check, because
+the hook compares commit dates with the body's last edit time.
 
 The default guidance refers to the `update-pr` skill. To replace it, set `hooks.pr-body-staleness.update-instruction` in `~/.config/hhx/config.yaml`:
 
