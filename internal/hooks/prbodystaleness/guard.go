@@ -101,7 +101,7 @@ query($owner:String!,$repo:String!,$sha:GitObjectID!){
       ... on Commit {
         associatedPullRequests(first:3){
           nodes{
-            number url state lastEditedAt createdAt headRefOid
+            number title url state lastEditedAt createdAt headRefOid
             commits(last:%d){nodes{commit{committedDate messageHeadline parents{totalCount}}}}
           }
         }
@@ -574,7 +574,7 @@ func message(
 	if len(headlines) == 0 {
 		return messages.Text(language, idLaggingOnly, map[string]any{
 			"Number": number, "Seconds": seconds, "Instruction": instruction, "URL": toolresponse.PyStr(url),
-		}), nil
+		}) + titleLine(language, pullRequest), nil
 	}
 	shown := headlines[:min(len(headlines), maxHeadlines)]
 	lines := make([]string, len(shown))
@@ -593,11 +593,21 @@ func message(
 	text := messages.Text(language, idStale, map[string]any{
 		"Number": number, "Count": len(headlines), "Commits": listed, "Instruction": instruction,
 		"URL": toolresponse.PyStr(url),
-	})
+	}) + titleLine(language, pullRequest)
 	if lagging {
 		text += "\n" + messages.Text(language, idLagging, map[string]any{"Seconds": seconds})
 	}
 	return text, nil
+}
+
+// titleLine は現在のタイトルを示す行（先頭に改行）である。タイトルと差分を突き合わせさせるために載せる。
+// title は移植元に無い項目なので、文字列で取れなければ例外にせず行を省く。
+func titleLine(language i18n.Language, pullRequest map[string]any) string {
+	title, ok := pullRequest["title"].(string)
+	if !ok || title == "" {
+		return ""
+	}
+	return "\n" + messages.Text(language, idTitle, map[string]any{"Title": py.QuoteJSON(title)})
 }
 
 // pyDecimal は移植元の "%d" % (number or 0) である。整数でも小数でもない真の値は例外になる。
