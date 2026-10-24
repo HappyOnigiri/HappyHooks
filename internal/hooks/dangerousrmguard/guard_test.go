@@ -665,6 +665,10 @@ func pathologicalInputs() []struct {
 		{"unclosed_subscript_flags", "echo " + strings.Repeat("${x[(", 5000), "", ""},
 		{"unclosed_subscript_quotes", "echo " + strings.Repeat("${x['", 5000), "", ""},
 		{"many_expansions", strings.Repeat("echo ${x:-y}; ", 5000) + "echo ${(f)x}", hooktest.Deny, labelUnparsed},
+		// `$(…)` の中の `))` の分岐。深い `(` の段でも、閉じるたびに外側の `$(` を探し直さない。
+		{"nested_subshells", strings.Repeat("( ", 50000) + "a" + strings.Repeat(")", 50000), "", ""},
+		{"nested_subshells_in_substitution", "echo $(" + strings.Repeat(" (a;", 50000) + strings.Repeat(")", 50001),
+			hooktest.Deny, labelUnparsedParens},
 	}
 }
 
@@ -910,6 +914,93 @@ func TestUnparsedExpansionAllowed(t *testing.T) {
 
 func TestUnparsedExpansionGate(t *testing.T) {
 	for input, want := range map[string]bool{`echo ${x}`: true, `echo $x`: false, `echo {x}`: false} {
+		if got := gate([]byte(input)); got != want {
+			t.Errorf("gate(%q)=%v, want %v", input, got, want)
+		}
+	}
+}
+
+// --- `$(…)` の中の `))`（Claude Code v2.1.309 の bKe。`$(` の閉じ括弧が見つからない） ---
+//
+// 期待値は v2.1.309 の組み込みのパーサーに通した結果（根が ERROR か）に合わせてある。
+
+var labelUnparsedParens = messages.T(hooktest.Language, idUnparsedParens)
+
+// 調査のきっかけになった実物（ファイルの宣言の形を数える）。パスは架空の値に置き換えた。
+const unparsedParensRealWorld = `cd /tmp/app && for f in $(ls usecase/*/base.go | grep -v legacy); do ` +
+	`d=$(git log --diff-filter=A --format='%ad %h' --date=short -- $f | tail -1); ` +
+	`k=$(grep -qE '^type [A-Za-z]+Interactor interface' $f && echo iface || ` +
+	`(grep -qE '^type [A-Za-z]+Interactor struct' $f && echo struct || echo other)); echo "$d $k $f"; done | sort | tail -20`
+
+func TestUnparsedParens(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelUnparsedParens,
+		unparsedParensRealWorld,
+		`echo "$(test -L $w/.envrc && echo L || (test -e $w/.envrc && echo F || echo -))"`,
+		// 区切り（`;`・`&`・`|`・`&&`・`||`・`|&`・改行）や `!` の直後、`$(` の先頭のサブシェル。空白が無くても同じ。
+		`echo $( (echo a))`, `k=$(false || (echo struct)); echo $k`, `echo $(a; (b))`, `echo $(a & (b))`,
+		`echo $(echo a | (cat))`, `echo $(a |& (b))`, `echo $(a&&(b))`, `echo $(a;(b))`, `echo $(! (a))`,
+		`echo $( (a); (b))`, "echo $(a\n(b))", "echo $(a # c\n(b))",
+		// 配列の代入（`=`・`+=`・添字つき）。
+		`echo $(x=(a b))`, `echo $(x+=(a))`, `echo $(x[1]=(a))`, `echo $(x=())`, `echo $(x=(1) y=(2))`,
+		// `$(` の中なら深さによらない。`(` や `<(` を挟んでも、閉じ括弧が 1 つずつずれて外側の `$(` が閉じない。
+		`echo $( ( (echo a)) )`, `echo $( cat <( (a)) )`, `echo $(echo $( (echo a)) )`, `echo $(x=$( (a)) )`,
+		// `$(` を読む文脈: ダブルクォート・バッククォート・`${…}`・クォートしない heredoc。前後に別の置換があっても止める。
+		`echo "$( (echo a))"`, "echo `echo $( (a))`", `echo ${x:-$( (echo a))}`, `echo "${x:-$(a || (b))}"`,
+		"cat <<EOF\n$(a || (b))\nEOF\necho done", `echo $(echo a)$( (b))`, `echo $(echo $((1)) && (b))`,
+		`echo $( (echo a)) # c`, `x=$( (echo a)) ls`,
+		// サブシェルの中のクォートやエスケープした `)` は閉じ括弧ではない。
+		`echo $( (echo "a)"))`, `echo $( (echo 'a)'))`, `echo $( (echo \)))`,
+	))
+	// 理由文には `))` までを添える。長いときは `))` に近い末尾だけを見せる。
+	reason := reasonOf(t, unparsedParensRealWorld, "/tmp")
+	if !strings.Contains(reason, "(…truct' $f && echo struct || echo other)))") ||
+		!strings.Contains(reason, messages.T(hooktest.Language, idWhyUnparsedParens)) {
+		t.Errorf("unparsed parens reason: %q", reason)
+	}
+	if reason := reasonOf(t, `echo $(a || (b)); echo done`, "/tmp"); !strings.Contains(reason, "((b)))") {
+		t.Errorf("unparsed parens reason must show the subshell up to `))`: %q", reason)
+	}
+	// rm の分岐が先に当たれば、その理由文を出す（組み込みと同じ順）。
+	check(t, hooktest.Deny, denyAll(labelEmptyVar, `rm -rf $D/*; echo $(a || (b))`))
+}
+
+func TestUnparsedParensAllowed(t *testing.T) {
+	check(t, "", hooktest.Commands(
+		// 閉じ括弧の間に空白か改行がある。
+		`echo $( (echo a) )`, `echo $(a || (b) )`, "echo $( (a)\n)", `echo $( ( a ) )`, `echo $(x=(a) )`,
+		// `$(` の外。最上位のサブシェルや `<(` は `))` でも組み込みが読み切れる。
+		`(cd /tmp && (ls))`, `cat <( (echo a))`, "echo `(echo a)`",
+		// 算術式（`$((…))`・`((…))`）の中と、その中の `$(`。
+		`echo $((1+2))`, `echo $(( (1+2) ))`, `echo $( ((1+2)) )`, `echo $( ((a)))`, `echo $(((a)) )`,
+		`echo $((a) || (b))`, `echo $(( $( (a)) ))`,
+		// 引数の位置の `(`（組み込みは読み戻すのでずれない）と、`time`・`{`・予約語の後ろの `(`。
+		`echo $(echo (a))`, `echo $(echo a (b))`, `echo $(echo a=(b))`, `echo $(echo $x(a))`, `echo $(!(b))`,
+		`echo $(time (a))`, `echo $({ (a)})`, `echo $(if (a)); then :; fi)`,
+		// `)` で閉じる別の形と、`))` ではない閉じ括弧。
+		`echo $(case a in a) echo a;; esac)`, `echo $( { (echo a); })`, `echo $(cat <(echo a))`,
+		`echo $(if a; then (b); fi)`, `echo $(a=(x)y)`, `echo $(a=(b) c)`, `echo $(x=( (a)) )`,
+		// 改行を含む配列は、組み込みが要素を改行の手前までしか読まないのでずれない。
+		"echo $(x=(\n))", "echo $(x=(a\n))", "echo $(x=(a b\nc))",
+		// 展開として読まない文脈: シングルクォート・$'…'・エスケープ・コメント・クォートした heredoc。
+		`echo '$( (echo a))'`, `echo $'$( (a))'`, `echo $(\(a))`, `echo $(echo \(a\))`, `echo x # $( (a))`,
+		"cat <<'X'\n$( (a))\nX",
+		// クォートが閉じない入力は判定しない。
+		`echo $( (a)) '`,
+		// 配列の代入の添字は組み込みも中を展開として読まないので、添字の中の `${` は止めない。
+		`x[${(f)y}]=(a)`,
+		// 案内した書き直し先: 閉じ括弧の間の空白と、サブシェルの代わりのグループ。
+		`$(a || (b) )`, `"$( (cd x && ls) )"`, `$(x=(a b) )`, `$(a || { b; })`,
+		`k=$(grep -q a f && echo i || (grep -q b f && echo s || echo o) ); echo $k`,
+		`k=$(grep -q a f && echo i || { grep -q b f && echo s || echo o; }); echo $k`,
+	))
+	// 添字の中の `$(…)` は配列の閉じ括弧と合わせて止める。
+	check(t, hooktest.Deny, denyAll(labelUnparsedParens, `echo $(x[$(a || (b))]=(c))`))
+}
+
+func TestUnparsedParensGate(t *testing.T) {
+	for input, want := range map[string]bool{
+		`echo $(a || (b))`: true, `echo $(a || (b) )`: false, `echo (a))`: false, `echo $((1))`: true,
+	} {
 		if got := gate([]byte(input)); got != want {
 			t.Errorf("gate(%q)=%v, want %v", input, got, want)
 		}

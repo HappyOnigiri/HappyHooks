@@ -29,6 +29,7 @@ const (
 	idHowInlineUnchecked = "dangerous-rm-guard.how.inline-shell-unchecked"
 	idHowInlineValue     = "dangerous-rm-guard.how.inline-shell-value"
 	idHowUnparsed        = "dangerous-rm-guard.how.unparsed-expansion"
+	idHowUnparsedParens  = "dangerous-rm-guard.how.unparsed-parens"
 
 	idWhyEmptyVar        = "dangerous-rm-guard.why.empty-variable"
 	idWhyDerived         = "dangerous-rm-guard.why.derived-variable"
@@ -44,6 +45,7 @@ const (
 	idWhyInlineUnchecked = "dangerous-rm-guard.why.inline-shell-unchecked"
 	idWhyInlineValue     = "dangerous-rm-guard.why.inline-shell-value"
 	idWhyUnparsed        = "dangerous-rm-guard.why.unparsed-expansion"
+	idWhyUnparsedParens  = "dangerous-rm-guard.why.unparsed-parens"
 
 	// 発火した分岐ごとの対象の表記。テストはこれでどの分岐が発火したかを見る。
 	idUnresolvable    = "dangerous-rm-guard.target.unresolvable"
@@ -56,6 +58,7 @@ const (
 	idInlineUnchecked = "dangerous-rm-guard.target.inline-shell-unchecked"
 	idInlineValue     = "dangerous-rm-guard.target.inline-shell-value"
 	idUnparsed        = "dangerous-rm-guard.target.unparsed-expansion"
+	idUnparsedParens  = "dangerous-rm-guard.target.unparsed-parens"
 )
 
 var messages = i18n.Register(i18n.Catalog{
@@ -298,6 +301,24 @@ var messages = i18n.Register(i18n.Catalog{
 			"安全にならないまま検査から隠すだけなので禁止です。",
 	},
 
+	// REWRITE: `$(…)` の中で `))` と続く閉じ括弧。2 つの `)` の間に空白を入れさせ、ファイルや別のシェルへ移す形を禁じる。
+	idHowUnparsedParens: {
+		EN: "{{.NoAsk}} Keep the command and only separate the closing parentheses.\n" +
+			"  1. Put a space between the two `)` " +
+			"(e.g. `$(a || (b))` → `$(a || (b) )`, `\"$( (cd x && ls))\"` → `\"$( (cd x && ls) )\"`, " +
+			"`$(x=(a b))` → `$(x=(a b) )`)\n" +
+			"  2. Or use a group instead of the subshell (e.g. `$(a || { b; })`)\n" +
+			"Moving the command into a script file, `bash -c '...'`, or `eval` only to dodge the check is forbidden, " +
+			"because it hides the command from the check without making it any safer.",
+		JA: "{{.NoAsk}}コマンドはそのままに、閉じ括弧だけを離してください。\n" +
+			"  1. 2 つの `)` の間に空白を入れる" +
+			"（例: `$(a || (b))` → `$(a || (b) )`、`\"$( (cd x && ls))\"` → `\"$( (cd x && ls) )\"`、" +
+			"`$(x=(a b))` → `$(x=(a b) )`）\n" +
+			"  2. サブシェルの代わりにグループを使う（例: `$(a || { b; })`）\n" +
+			"検出を外すためだけにコマンドをスクリプトファイル・`bash -c '...'`・`eval` へ移す書き方は、" +
+			"安全にならないまま検査から隠すだけなので禁止です。",
+	},
+
 	// 以下は各分岐の理由。なぜ静的に安全と判定できないか、または消すと何が起きるかを書く。
 	idWhyEmptyVar: {
 		EN: "The target starts with `$variable/`, so when the variable is undefined or empty the target turns into " +
@@ -395,6 +416,16 @@ var messages = i18n.Register(i18n.Catalog{
 			"コマンドに rm が無くても、危険な rm が無いことを確かめられません。" +
 			"Claude Code は bypass でもこれを確認ダイアログにします。",
 	},
+	idWhyUnparsedParens: {
+		EN: "Claude Code's shell parser reads `))` as a single token. When a subshell or an array inside `$(...)` " +
+			"closes right before another `)`, the parser takes both as the end of the subshell and cannot find where " +
+			"the `$(...)` ends, so it cannot rule out a dangerous rm in the command, even if the command contains no rm. " +
+			"Claude Code asks for confirmation for this even in bypass mode.",
+		JA: "Claude Code のシェルの解析器は `))` を 1 つの字句として読みます。" +
+			"`$(...)` の中のサブシェルや配列が別の `)` の直前で閉じると、解析器は 2 つともサブシェルの終わりとして読み、" +
+			"`$(...)` の終わりを見つけられないため、コマンドに rm が無くても、危険な rm が無いことを確かめられません。" +
+			"Claude Code は bypass でもこれを確認ダイアログにします。",
+	},
 
 	// 対象の表記。{{.Command}} は rm か rmdir である。
 	idUnresolvable: {EN: "a deletion target that cannot be resolved statically", JA: "静的に解決できない削除対象"},
@@ -413,6 +444,10 @@ var messages = i18n.Register(i18n.Catalog{
 		JA: "シェルの -c のスクリプトの中の、実行時にしか分からない値を対象にした {{.Command}}",
 	},
 	idUnparsed: {EN: "an expansion that Claude Code cannot parse", JA: "Claude Code が解析できない展開"},
+	idUnparsedParens: {
+		EN: "a command substitution that Claude Code cannot parse",
+		JA: "Claude Code が解析できないコマンド置換",
+	},
 })
 
 // finding は発火した分岐である。target・why・how はカタログの ID で、command は rm か rmdir、

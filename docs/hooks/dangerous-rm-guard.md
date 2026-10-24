@@ -21,9 +21,15 @@ turns off this check in both Claude Code and the hook. Claude Code can also turn
 feature flag that the hook cannot see; in that case only the hook denies.
 
 Expansions that Claude Code's shell parser cannot read follow v2.1.309. Claude Code asks for confirmation when its
-parser cannot read a command, even without `rm` in it. The hook denies the form seen in practice: zsh-only syntax right
-after `${`, such as the parameter flags in `${(f)"$(cmd)"}` and `${(M)FILES:#*.rb}`, nested forms such as `${${x}}`,
-and subscript flags such as `${x[(r)pat]}`. Inside single quotes, `$'...'`, comments, and quoted heredocs, `${` is not
-an expansion and is left alone. Other forms that Claude Code's parser cannot read are not covered.
+parser cannot read a command, even without `rm` in it. The hook denies the two forms seen in practice:
+
+- zsh-only syntax right after `${`, such as the parameter flags in `${(f)"$(cmd)"}` and `${(M)FILES:#*.rb}`, nested
+  forms such as `${${x}}`, and subscript flags such as `${x[(r)pat]}`.
+- Inside `$(...)`, a subshell or an array assignment whose closing `)` is followed right away by another `)`, such as
+  `$(a || (b))`, `"$( (cd x && ls))"`, and `$(x=(a b))`. Claude Code's parser reads `))` as one token and cannot find
+  where the `$(...)` ends. A space between the two `)` (`$(a || (b) )`) passes.
+
+Inside single quotes, `$'...'`, comments, and quoted heredocs, these are not expansions and are left alone.
+Other forms that Claude Code's parser cannot read are not covered.
 
 Other checks may differ from newer versions.
