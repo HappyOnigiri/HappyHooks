@@ -10,7 +10,7 @@
 //
 // 方針:
 //   - 基本の判定は Claude Code v2.1.239 の組み込みのロジックを移植した。先行代入から派生した変数の削除は
-//     v2.1.283 の判定を、shell -c のスクリプトの検査は v2.1.296 の判定を、読み切れない `${…}` の検査は
+//     v2.1.283 の判定を、shell -c のスクリプトの検査は v2.1.296 の判定を、読み切れない `${…}` と `$(…)` の検査は
 //     v2.1.309 の判定を移した（ファイル末尾の節）。
 //     その他の新しい分岐への追従は未確認である。
 //   - 理由文は REWRITE と REPORT の 2 系統に分ける（messages.go）。REWRITE の案内には「ガードが働く形」だけを書く。
@@ -27,7 +27,7 @@
 //	on working directory or its ancestor        → REPORT   (MF。cwd と一致する場合だけ REWRITE)
 //	shell -c script ... could not be checked    → REWRITE  (v2.1.296 の Fcn / Lwe)
 //	in a shell -c script, on a target built ... → REWRITE  (v2.1.296 の HTr。中身は上の各分岐で判定する)
-//	the shell may read it differently ...       → REWRITE  (v2.1.309 の bKe。`${` の直後を読み切れない形だけ)
+//	the shell may read it differently ...       → REWRITE  (v2.1.309 の bKe。`${` の直後を読み切れない形と、`$(…)` の中の `))`)
 //
 // 組み込みは "statically-unresolvable" の 3 分岐に別々の理由文を持たせているので、こちらも分けて出す
 // （cd で基準が不定 / 対象の形が上へ広がる / glob が複数階層）。1 本にまとめると、`cd tmp && rm -rf ./*` の正解である
@@ -92,13 +92,14 @@ func Definition() hookrt.Definition {
 	}
 }
 
-// gate は一次ゲートである。rm を含む入力、シェルの -c らしき入力（`sh` と `-…c` の両方を含む）、`${` を含む入力を判定する。
-// 後の 2 つは、v2.1.296 の shell -c スクリプトの検査と v2.1.309 の読み切れない `${…}` の検査が、
+// gate は一次ゲートである。rm を含む入力、シェルの -c らしき入力（`sh` と `-…c` の両方を含む）、`${` を含む入力、
+// `$(` と `))` の両方を含む入力を判定する。
+// 後の 3 つは、v2.1.296 の shell -c スクリプトの検査と v2.1.309 の読み切れない形の検査が、
 // rm の語の無いコマンドでも ask を出すためである。
 func gate(input []byte) bool {
 	text := string(input)
 	return strings.Contains(text, "rm") || (strings.Contains(text, "sh") && inlineGateRE.MatchString(text)) ||
-		strings.Contains(text, "${")
+		strings.Contains(text, "${") || (strings.Contains(text, "$(") && strings.Contains(text, "))"))
 }
 
 func run(c *hookrt.Context) error {
@@ -122,9 +123,7 @@ func run(c *hookrt.Context) error {
 	}
 	if found.target == "" {
 		// 組み込みは rm の分岐を先に見て、どれにも当たらなければこの ask を出す。最上位のコマンドだけが対象である。
-		if token := findUnparsedExpansion(command); token != "" {
-			found = finding{target: idUnparsed, token: token, why: idWhyUnparsed, how: idHowUnparsed}
-		}
+		found = findUnparsed(command)
 	}
 	if found.target != "" {
 		c.Deny(reason(c.Language(), found))
@@ -1659,14 +1658,26 @@ func findInlineShell(command, cwd string, depth int) (finding, error) {
 // 最上位のコマンドだけが対象で、shell -c の中の再帰検査では出ない。
 //
 // 根が ERROR になるのは、解析の途中で zshBraceDiff・zshCondParenDiff・keywordDesync のどれかが立ったときである。
-// 立てる箇所は 30 近くあるが、移したのは `${` の直後の文法（`Pe`）が読み切れず、続く文字が `}` でない箇所だけである。
-// 過去の Bash のコマンド 47,774 件を組み込みのパーサーに通すと、根が ERROR になった 16 件はすべてこの箇所だった
-// （`${(f)"$(…)"}`・`${(M)FILES:#*.rb}` のような zsh のパラメータフラグ）。
+// 立てる箇所は 30 近くあるが、移したのは次の 2 箇所だけである。
+//   - `${` の直後の文法（`Pe`）が読み切れず、続く文字が `}` でない（`${(f)"$(…)"}`・`${(M)FILES:#*.rb}` のような
+//     zsh のパラメータフラグ）。過去の Bash のコマンド 47,774 件を組み込みのパーサーに通すと、根が ERROR になった 16 件は
+//     すべてこの箇所だった。
+//   - `$(` の中を読み終えた位置が `)` でない。組み込みのトークナイザは `))` を 1 つの字句として読むので、
+//     文の位置のサブシェル（区切りや `!` の直後の `(`）と配列の代入（`x=(…)`）が `))` で閉じると、2 文字とも
+//     その閉じ括弧として読まれ、外側の `$(` の閉じ括弧が無くなる（`$(a || (b))`・`"$( (a))"`・`$(x=(a b))`）。
+//     間の `(` や `<(` も同じく 1 つずつずれるので、`$(` の中のどの深さでも起きる。`$(` の外（`(a && (b))`）、
+//     算術式（`$((…))`・`((…))`）の中、引数の位置の `(`（`echo (a))`。読み戻すのでずれない）では起きない。
+//     過去の Bash のコマンド 161,423 件では、上の `${` の分岐以外で根が ERROR になった実物はすべてこの形だった。
 //
 // 移植していない条件（組み込みでは ask になるが、ここでは通す）:
 //   - `${` の後ろの演算子（`:-`・`/`・`#` など）より後ろの読み方。`${x:-{a}}` の `{` などでも根が ERROR になる。
 //   - 配列の要素・パターン・クォートの走査の中の `$(`・`` ` ``・`{`、閉じない `$(`、`$\` と改行、
 //     `[[(`（zshCondParenDiff）、代入やリダイレクトの直後の予約語（keywordDesync。`FOO=1 if …`）。
+//   - `))` のうち、bash では構文エラーになる位置の `(`（先行代入・リダイレクト・`do` の後ろ、`f() (…))` の本体）と、
+//     宣言のコマンドの引数の配列（`local x=(a))`）。`time`・`{`・`if` の後ろの `(` は組み込みでも通る。
+//
+// 組み込みとずれ得る点（逆向き）: bash でも構文エラーになる入力（`$( (a)))` の余分な `)`、配列の要素の `(`）では、
+// 組み込みが通すものを止めることがある。ランダムに組み立てた 30 万件で、bash の構文として正しい入力での食い違いは無かった。
 //
 // 組み込みとずれ得る点: 組み込みは解析が時間の上限（50ms）を超えると打ち切り、この分岐に来ない。ここでは長さによらず止める。
 
@@ -1684,14 +1695,21 @@ const (
 type scanFrame struct {
 	mode     int
 	backtick bool
+	cmdsub   bool // `$(` のコマンド置換（算術式の中の `$(` は組み込みが別に読むので含めない）
+	arith    bool // 算術式（`$((…))`・`((…))`）の中。中の `(` は文にならない
+	array    bool // 配列の代入の `(`。中の `(` は要素であって文にならない
+	closes   bool // 閉じ括弧が直後の `)` と合わせて `))` の字句として読まれる `(`（文の位置のサブシェルと配列の代入）
+	inCmdsub bool // `(` の段だけを外へ辿って `$(` に届くか（`))` で閉じ括弧が 1 つずれると、その `$(` が閉じなくなる）
+	start    int  // 開き括弧の位置（理由文の表記に使う）
 }
 
-// findUnparsedExpansion は、組み込みのパーサーが読み切れない `${…}` を探し、その `${` からの表記を返す（無ければ空）。
-// `${` を展開として読む文脈（クォートの外・ダブルクォートの中・コマンド置換・クォートしない heredoc の本文）だけを見る。
+// findUnparsed は、組み込みのパーサーが読み切れない形（`${…}` か `$(…)` の中の `))`）を探し、最初に見つけた分岐を返す。
+// 展開として読む文脈（クォートの外・ダブルクォートの中・コマンド置換・クォートしない heredoc の本文）だけを見る。
 // シングルクォート・`$'…'`・コメント・クォートした heredoc の本文の中は見ない。クォートが閉じない入力は判定しない。
-func findUnparsedExpansion(command string) string {
-	if !strings.Contains(command, "${") {
-		return ""
+func findUnparsed(command string) finding {
+	parens := strings.Contains(command, "$(") && strings.Contains(command, "))")
+	if !parens && !strings.Contains(command, "${") {
+		return finding{}
 	}
 	return scanExpansions(command, scanCode)
 }
@@ -1699,30 +1717,41 @@ func findUnparsedExpansion(command string) string {
 // expansionScanner は scanExpansions の走査の状態である。
 type expansionScanner struct {
 	command   string
-	found     string // 最初に見つけた読み切れない `${` の表記
+	found     finding // 最初に見つけた読み切れない形
 	stack     []scanFrame
 	pending   []heredocMarker // 行末で本文を読む heredoc
 	wordStart bool            // 直前が語の区切りか（`#` をコメントとして読むか）
+	cmdStart  bool            // 次の語が文の先頭か（`(` をサブシェルとして読むか）
 }
 
-// scanExpansions は base の文脈から command を走査し、最初に読み切れない `${` の表記を返す。
+// scanExpansions は base の文脈から command を走査し、最初に読み切れない形を返す。
 // 見つけても末尾まで走査し、閉じない heredoc やクォートがあれば判定しない（空を返す）。
-func scanExpansions(command string, base int) string {
-	s := &expansionScanner{command: command, stack: []scanFrame{{mode: base}}, wordStart: true}
+func scanExpansions(command string, base int) finding {
+	s := &expansionScanner{command: command, stack: []scanFrame{{mode: base}}, wordStart: true, cmdStart: true}
 	for i := 0; i < len(command); i++ {
 		next, ok := s.step(i)
 		if !ok {
-			return ""
+			return finding{}
 		}
 		i = next
 	}
 	if len(s.pending) > 0 {
-		return "" // 本文の無い heredoc も閉じていない
+		return finding{} // 本文の無い heredoc も閉じていない
 	}
 	return s.found
 }
 
-func (s *expansionScanner) push(mode int) { s.stack = append(s.stack, scanFrame{mode: mode}) }
+func (s *expansionScanner) push(mode int) { s.pushFrame(scanFrame{mode: mode}) }
+
+// pushFrame は frame を積む。算術式の中であることは内側へ引き継ぎ、`(` の段は外側の `$(` に届くかを決める。
+func (s *expansionScanner) pushFrame(frame scanFrame) {
+	parent := s.stack[len(s.stack)-1]
+	frame.arith = frame.arith || parent.arith
+	if frame.mode == scanSubshell {
+		frame.inCmdsub = parent.cmdsub || parent.mode == scanSubshell && parent.inCmdsub
+	}
+	s.stack = append(s.stack, frame)
+}
 
 func (s *expansionScanner) pop() {
 	if len(s.stack) > 1 {
@@ -1737,25 +1766,31 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 	c := command[i]
 	switch {
 	case c == '\\':
-		s.wordStart = false
+		s.wordStart, s.cmdStart = false, false
 		return i + 1, true
 	case c == '$' && i+1 < len(command) && command[i+1] == '{':
-		if s.found == "" && !expansionHeadParses(command, i+2) {
-			s.found = expansionShown(command, i)
+		if s.found.target == "" && !expansionHeadParses(command, i+2) {
+			s.found = finding{target: idUnparsed, token: expansionShown(command, i), why: idWhyUnparsed, how: idHowUnparsed}
 		}
 		if top.mode >= scanDquote {
 			s.push(scanBraceDQ)
 		} else {
 			s.push(scanBrace)
 		}
-		s.wordStart = false
+		s.wordStart, s.cmdStart = false, false
 		return i + 1, true
+	case c == '$' && i+2 < len(command) && command[i+1] == '(' && command[i+2] == '(':
+		// 算術式の展開。組み込みは `$((` を算術式として読み、中の `(` と `$(` を文として読まない。
+		s.pushFrame(scanFrame{mode: scanCode, arith: true, start: i})
+		s.pushFrame(scanFrame{mode: scanSubshell, arith: true, start: i + 1})
+		s.wordStart, s.cmdStart = true, false
+		return i + 2, true
 	case c == '$' && i+1 < len(command) && command[i+1] == '(':
-		s.push(scanCode)
-		s.wordStart = true
+		s.pushFrame(scanFrame{mode: scanCode, cmdsub: !top.arith, start: i})
+		s.wordStart, s.cmdStart = true, true
 		return i + 1, true
 	case c == '$' && i+1 < len(command) && command[i+1] == '\'' && top.mode < scanDquote:
-		s.wordStart = false
+		s.wordStart, s.cmdStart = false, false
 		return skipANSIC(command, i+2), true
 	case c == '`':
 		if top.backtick {
@@ -1763,8 +1798,11 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 		} else {
 			s.stack = append(s.stack, scanFrame{mode: scanCode, backtick: true})
 		}
-		s.wordStart = true
+		s.wordStart, s.cmdStart = true, !top.backtick
 		return i, true
+	}
+	if top.mode >= scanDquote {
+		s.cmdStart = false
 	}
 	switch top.mode {
 	case scanHeredoc:
@@ -1792,6 +1830,26 @@ func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool
 	command := s.command
 	c := command[i]
 	inBrace := top.mode == scanBrace
+	cmdStart := s.cmdStart
+	// 文の先頭を保つのは、空白・区切り・単独の `!`・コメントだけである。それ以外の文字は語を始める。
+	switch {
+	case c == ' ' || c == '\t' || c == '#' && s.wordStart:
+	case c == '\n' && top.array:
+		// 組み込みは配列の要素を改行の手前までしか読まず、残りを文として読み直す。閉じ括弧の位置がずれなくなる。
+		s.stack[len(s.stack)-1].closes = false
+		s.cmdStart = true
+	case c == ';' || c == '&' || c == '|' || c == '\n':
+		s.cmdStart = true
+	case c == '!' && i+1 < len(command) && (command[i+1] == ' ' || command[i+1] == '\t'):
+	default:
+		s.cmdStart = false
+	}
+	if cmdStart && !inBrace && !top.arith && !top.array {
+		if open := arrayAssignmentParen(command, i); open >= 0 {
+			s.pushFrame(scanFrame{mode: scanSubshell, array: true, closes: true, start: open})
+			return open, true
+		}
+	}
 	switch {
 	case c == '\'':
 		end := strings.IndexByte(command[i+1:], '\'')
@@ -1804,10 +1862,23 @@ func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool
 	case c == '}' && inBrace:
 		s.pop()
 	case inBrace:
+	case c == '(' && cmdStart && !top.arith && !top.array && i+1 < len(command) && command[i+1] == '(':
+		// 文の位置の `((` は算術式のコマンドで、`))` で閉じる。
+		s.pushFrame(scanFrame{mode: scanSubshell, arith: true, start: i})
+		s.pushFrame(scanFrame{mode: scanSubshell, arith: true, start: i + 1})
+		return i + 1, true
 	case c == '(':
-		s.push(scanSubshell)
+		closes := cmdStart && !top.arith && !top.array
+		s.pushFrame(scanFrame{mode: scanSubshell, closes: closes, start: i})
+		s.cmdStart = !top.arith && !top.array
 	case c == ')' && !top.backtick:
 		s.pop()
+		if top.closes && top.inCmdsub && i+1 < len(command) && command[i+1] == ')' && s.found.target == "" {
+			s.found = finding{target: idUnparsedParens, token: parensShown(command, top.start, i+2),
+				why: idWhyUnparsedParens, how: idHowUnparsedParens}
+		}
+		// 配列の代入は先行代入なので、閉じた後も文の先頭が続く。
+		s.cmdStart = top.array
 	case c == '#' && s.wordStart:
 		if end := strings.IndexByte(command[i:], '\n'); end >= 0 {
 			return i + end - 1, true
@@ -1827,6 +1898,45 @@ func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool
 	return i, true
 }
 
+// arrayAssignmentParen は i から始まる語が配列の代入（`name=(`・`name+=(`・`name[…]=(`）なら、その `(` の位置を返す（違えば -1）。
+func arrayAssignmentParen(command string, i int) int {
+	isNameStart := func(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' }
+	if i >= len(command) || !isNameStart(command[i]) {
+		return -1
+	}
+	j := i + 1
+	for j < len(command) && (isNameStart(command[j]) || command[j] >= '0' && command[j] <= '9') {
+		j++
+	}
+	if j < len(command) && command[j] == '[' {
+		end := strings.IndexAny(command[j:min(len(command), j+maxSubscript)], "]\n")
+		if end < 0 || command[j+end] != ']' {
+			return -1
+		}
+		j += end + 1
+	}
+	if j < len(command) && command[j] == '+' {
+		j++
+	}
+	if j+1 < len(command) && command[j] == '=' && command[j+1] == '(' {
+		return j + 1
+	}
+	return -1
+}
+
+// parensShown は理由文に添える `(…))` の表記である。長いときは `))` に近い末尾だけを見せる。
+func parensShown(command string, start, end int) string {
+	const limit = 40
+	if end-start <= limit {
+		return command[start:end]
+	}
+	cut := end - limit
+	for cut < end && !utf8.RuneStart(command[cut]) {
+		cut++
+	}
+	return "…" + command[cut:end]
+}
+
 // readHeredocBodies は改行（i）の後ろに続く heredoc の本文を順に読み、最後の区切りの行の末尾の手前を返す。
 func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
 	next := i + 1
@@ -1838,11 +1948,12 @@ func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
 			// 区切りの行で閉じない heredoc は、組み込みのパーサーが解析を打ち切ることがある（その場合は ask にならない）。
 			return i, false
 		}
-		if !marker.quoted && s.found == "" {
+		if !marker.quoted && s.found.target == "" {
 			s.found = scanExpansions(body, scanHeredoc)
 		}
 	}
 	s.pending = nil
+	s.cmdStart = true
 	return next - 1, true
 }
 
