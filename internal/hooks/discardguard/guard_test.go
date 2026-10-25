@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1017,24 +1019,38 @@ func TestResolveParenthesesThatDoNotCloseASubshellKeepTheCdTarget(t *testing.T) 
 	}
 }
 
-func TestTokenizeKeepsTokensAndRecordsParens(t *testing.T) {
-	tokens, parens := tokenize("(cd a&&git -C b reset)|x $(y) ((z))")
-	wantTokens := []string{"cd", "a", "git", "-C", "b", "reset", "x", "$", "y", "z"}
-	if !reflect.DeepEqual(tokens, wantTokens) {
-		t.Fatalf("tokens = %q", tokens)
+func TestTokenizeKeepsTokensAndRecordsSeparators(t *testing.T) {
+	tokens := tokenize("(cd a&&git -C b reset)|x $(y) ((z))\nw")
+	wantTokens := []string{"cd", "a", "git", "-C", "b", "reset", "x", "$", "y", "z", "w"}
+	if got := tokenTexts(tokens); !reflect.DeepEqual(got, wantTokens) {
+		t.Fatalf("tokens = %q", got)
 	}
-	want := map[int]string{0: "(", 6: ")", 8: "(", 9: ")(("}
-	for index := range tokens {
-		if got := string(parens[index]); got != want[index] {
-			t.Errorf("parens before %q = %q, want %q", tokens[index], got, want[index])
+	want := map[int]string{0: "(", 2: "&&", 6: ")|", 8: "(", 9: ")((", 10: "))\n"}
+	for index, token := range tokens {
+		if token.seps != want[index] {
+			t.Errorf("seps before %q = %q, want %q", token.text, token.seps, want[index])
 		}
 	}
-	// 移植元のトークン（括弧を空白に置き換えて分けたもの）と同じ列になる。
+	// 移植元のトークン（区切りを空白に置き換えて分けたもの）と同じ列になる。
 	command := "a(b)c{d}e;f&g|h　(i"
-	tokens, _ = tokenize(command)
-	if want := py.Fields(separatorRE.ReplaceAllString(command, " ")); !reflect.DeepEqual(tokens, want) {
-		t.Errorf("tokens = %q, want %q", tokens, want)
+	if got, want := tokenTexts(tokenize(command)), py.Fields(regexp.MustCompile(`[(){};&|]`).ReplaceAllString(command, " ")); !reflect.DeepEqual(got, want) {
+		t.Errorf("tokens = %q, want %q", got, want)
 	}
+	// ${NAME} だけは 1 語にする。名前以外を囲む形は移植元と同じく区切る。
+	if got, want := tokenTexts(tokenize("cd ${S}/x; echo ${X:-$(cd /y)}")), []string{"cd", "${S}/x", "echo", "$", "X:-$", "cd", "/y"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("tokens = %q, want %q", got, want)
+	}
+	if got := tokenize("ab  cd")[1].offset; got != 4 {
+		t.Errorf("offset = %d", got)
+	}
+}
+
+func tokenTexts(tokens []token) []string {
+	texts := make([]string, len(tokens))
+	for index, token := range tokens {
+		texts[index] = token.text
+	}
+	return texts
 }
 
 func TestHelpers(t *testing.T) {
@@ -1785,5 +1801,481 @@ func TestWorktreePathsAreResolvable(t *testing.T) {
 		{"git reset --hard && git -C " + w.wt2 + " clean -fd", w.wt1, []string{w.wt1, w.wt2}},
 	} {
 		assertTargets(t, testCase.command, testCase.cwd, testCase.want...)
+	}
+}
+
+// --- scratchpad と同じコマンドの中の変数 -------------------------------------
+
+// testSession は hooktest.BashPayload が payload に入れる session_id である。
+const testSession = "test-session"
+
+type scratchFixture struct {
+	// root は scratchRoot の実体、sp はこのセッションの scratchpad、other は別のセッションの scratchpad である。
+	root, sp, other string
+	// repo は scratchpad の外の、未コミットの変更があるリポジトリである。
+	repo string
+	// clone は scratchpad の中の、未コミットの変更がある clone である。
+	clone string
+}
+
+// newScratchFixture は scratchRoot を一時ディレクトリに差し替え、Claude Code と同じ形の scratchpad を作る。
+func newScratchFixture(t *testing.T) scratchFixture {
+	t.Helper()
+	tmp := tempDir(t)
+	root := mkdir(t, filepath.Join(tmp, "tmproot"))
+	previous := scratchRoot
+	scratchRoot = root
+	t.Cleanup(func() { scratchRoot = previous })
+	user := filepath.Join(root, "claude-"+strconv.Itoa(os.Getuid()), "-Users-alice-dev-acme")
+	f := scratchFixture{
+		root:  root,
+		sp:    mkdir(t, filepath.Join(user, testSession, "scratchpad")),
+		other: mkdir(t, filepath.Join(user, "other-session", "scratchpad")),
+		repo:  makeRepo(t, filepath.Join(tmp, "repo"), repoOptions{}),
+	}
+	f.clone = makeRepo(t, filepath.Join(f.sp, "tgv1"), repoOptions{})
+	return f
+}
+
+func codexPayload(command, cwd string) string {
+	data, err := json.Marshal(map[string]any{
+		"session_id":      testSession,
+		"transcript_path": "/Users/alice/.codex/sessions/2026/10/25/rollout-2026-10-25T12-00-00-" + testSession + ".jsonl",
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "Bash",
+		"tool_input":      map[string]any{"command": command},
+		"cwd":             cwd,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+// 使い捨ての clone を同じコマンドで作って破棄する形は、snapshot を取らずに通す（clone はまだ無い）。
+func TestScratchpadCloneCreatedInTheSameCommandPasses(t *testing.T) {
+	f := newScratchFixture(t)
+	home := mkdir(t, filepath.Join(f.root, "home"))
+	t.Setenv("HOME", home)
+	source := makeRepo(t, filepath.Join(home, "src"), repoOptions{})
+	command := "set -e; S=" + f.sp + "; D=$S/verify1; cd ~/src; git clone -q --shared ~/src $D; git -C $D checkout -q -- ."
+	checkProtected(t, f.repo, command)
+	if refExists(source, snapshotRef) || refExists(f.repo, snapshotRef) {
+		t.Error("a discard inside the scratchpad must not take a snapshot")
+	}
+}
+
+// 既にある scratchpad の clone を変数で指して破棄する形も、snapshot を取らずに通す。
+func TestScratchpadExistingCloneViaVariablePasses(t *testing.T) {
+	f := newScratchFixture(t)
+	for _, command := range []string{
+		"D=" + f.clone + "; cd $D && git reset --hard HEAD",
+		`D="` + f.clone + `"; cd "$D" && git reset --hard`,
+		"S=" + f.sp + "; git -C ${S}/tgv1 reset --hard",
+		"export D=" + f.clone + "; git -C $D clean -fd",
+		"S=" + f.sp + "\nD=$S/tgv1\ngit -C $D checkout -- .",
+		"git -C " + f.clone + " reset --hard",
+		"cd " + f.clone + " && git reset --hard",
+	} {
+		checkProtected(t, f.repo, command)
+	}
+	if refExists(f.clone, snapshotRef) || refExists(f.repo, snapshotRef) {
+		t.Error("a discard inside the scratchpad must not take a snapshot")
+	}
+}
+
+// scratchpad へスクリプトを書き出すだけの here-document は、本文の破棄を検出しない。
+func TestScratchpadHeredocWrittenToAFilePasses(t *testing.T) {
+	f := newScratchFixture(t)
+	for _, command := range []string{
+		"cat > " + f.sp + "/mkclone.sh <<'EOF'\n#!/bin/bash\nset -e\nDST=$1\ngit clone -q --shared \"$SRC\" \"$DST\"\n" +
+			"cd \"$DST\"\ngit checkout -q -- .\nEOF",
+		"S=" + f.sp + "; cat > $S/mkclone.sh <<'EOF'\ncd \"$DST\"\ngit checkout -q -- .\nEOF\nchmod +x $S/other.sh",
+		"tee " + f.sp + "/run.sh <<EOF >/dev/null\ncd $DST && git reset --hard\nEOF",
+	} {
+		expectPass(t, command, f.repo)
+	}
+	if refExists(f.repo, snapshotRef) {
+		t.Error("a script written to a file must not take a snapshot")
+	}
+}
+
+// 「deny のまま残る実例」。どれも対象を特定できない理由で止める。
+func TestScratchpadUnresolvedFormsStillDeny(t *testing.T) {
+	f := newScratchFixture(t)
+	for _, command := range []string{
+		// 同じコマンドに代入が無い。
+		"cd $REPO && git reset --hard",
+		// 別のセッションの scratchpad。
+		"D=" + f.other + "/x; git -C $D reset --hard",
+		// シェルへ流し込む本文。内側のシェルは外側の変数を見ない。
+		"D=" + f.clone + "; bash <<'EOF'\ncd $D\ngit reset --hard\nEOF",
+		"bash <<'EOF'\nD=" + f.clone + "\ncd $D\ngit reset --hard\nEOF",
+		"cat <<'EOF' | sh\ncd $D\ngit reset --hard\nEOF",
+		// 書き出したスクリプトを同じコマンドで実行する。
+		"cat > " + f.sp + "/run.sh <<'EOF'\ncd \"$1\"\ngit reset --hard\nEOF\nbash " + f.sp + "/run.sh x",
+	} {
+		expectDeny(t, command, f.repo, unresolved)
+	}
+	if refExists(f.repo, snapshotRef) || refExists(f.clone, snapshotRef) {
+		t.Error("denied commands must not create a snapshot")
+	}
+}
+
+// 変数を展開した先が scratchpad の外なら、リテラルのパスと同じく snapshot を取ってから通す。
+func TestScratchpadVariableOutsideTakesASnapshot(t *testing.T) {
+	f := newScratchFixture(t)
+	checkProtected(t, f.clone, "D="+f.repo+"; git -C $D reset --hard")
+	if !refExists(f.repo, snapshotRef) {
+		t.Error("the repository outside the scratchpad must be saved")
+	}
+}
+
+// 値が変わりうる変数は信用しない。
+func TestScratchpadUntrustedVariablesDeny(t *testing.T) {
+	f := newScratchFixture(t)
+	for _, command := range []string{
+		"D=" + f.repo + "; [ -d x ] && D=" + f.clone + "; git -C $D reset --hard", // 2 回代入する
+		"true && D=" + f.clone + "; git -C $D reset --hard",                       // 条件つきの代入
+		"false || D=" + f.clone + "; git -C $D reset --hard",
+		"if true; then\nD=" + f.clone + "\nfi\ngit -C $D reset --hard",
+		"{ D=" + f.clone + "; }; git -C $D reset --hard",
+		"D=" + f.clone + " git -C $D reset --hard", // git の環境だけを変える
+		"D=" + f.clone + " | true; git -C $D reset --hard",
+		"D=" + f.clone + " & git -C $D reset --hard",
+		"for D in " + f.clone + "; do git -C $D reset --hard; done",
+		"(D=" + f.clone + "); git -C $D reset --hard", // サブシェルの中の代入
+		"D=" + f.clone + "; eval \"$X\"; git -C $D reset --hard",
+		"D=" + f.clone + "; source ./env.sh; git -C $D reset --hard",
+		"D=" + f.clone + "; read D; git -C $D reset --hard",
+		"D=" + f.clone + "; : ${D:=x}; git -C $D reset --hard",
+		"D=" + f.clone + "; D+=/x; git -C $D reset --hard",
+		"D=$(echo " + f.clone + "); git -C $D reset --hard",
+		"D=`echo " + f.clone + "`; git -C $D reset --hard",
+		"D=$HOME; git -C $D reset --hard",
+		"D=; git -C \"$D\" reset --hard",               // 空の値
+		"D='" + f.sp + "/a b'; git -C $D reset --hard", // 分割される値
+		"D=" + f.sp + "/*; git -C $D reset --hard",
+		"D=" + f.clone + "; git -C \"$D/$X\" reset --hard",
+		"D=" + f.clone + "; git -C $1 reset --hard",
+		"D=" + f.clone + "; GIT_DIR=$D/.git; git reset --hard",
+	} {
+		expectDeny(t, command, f.repo, unresolved)
+	}
+	if refExists(f.repo, snapshotRef) || refExists(f.clone, snapshotRef) {
+		t.Error("denied commands must not create a snapshot")
+	}
+}
+
+// まだ無い scratchpad のディレクトリへの cd は、失敗すれば前のディレクトリに留まる。
+// && でつながるか、set -e の下で単独で走る場合だけ通す。
+func TestScratchpadCdIntoMissingDirectory(t *testing.T) {
+	f := newScratchFixture(t)
+	missing := f.sp + "/new"
+	for _, command := range []string{
+		"git clone -q " + f.repo + " " + missing + " && cd " + missing + " && git reset --hard",
+		"git clone -q " + f.repo + " " + missing + " && cd " + missing + " &&\ngit reset --hard",
+		"set -e; git clone -q " + f.repo + " " + missing + "; cd " + missing + "; git checkout -B x",
+		"set -euo pipefail\nW=" + missing + "\ngit clone -q " + f.repo + " $W\ncd $W\ngit reset --hard",
+		"git -C " + missing + " reset --hard", // git -C は行き先が無ければ失敗する
+		"cd " + missing + " && (git reset --hard)",
+		// 絶対パスの cd は、前の失敗したかもしれない cd に依らない。
+		"cd " + f.sp + "/a; git clone -q " + f.repo + " " + missing + " && cd " + missing + " && git reset --hard",
+	} {
+		checkProtected(t, f.repo, command)
+	}
+	for _, command := range []string{
+		"cd " + missing + "; git reset --hard",
+		"cd " + missing + "\ngit reset --hard",
+		"set -e; cd " + missing + " || true; git reset --hard",
+		"set -e; true || cd " + missing + "; git reset --hard",
+		"set -e; if true; then cd " + missing + "; fi; git reset --hard",
+		"set -e; set +e; cd " + missing + "; git reset --hard",
+		"cd " + missing + " && true; git reset --hard",
+		"true || cd " + missing + " && git reset --hard",
+		"cd " + missing + " && git -C sub reset --hard; git reset --hard",
+		"cd " + missing + " | git reset --hard",
+		// 相対パスの cd は、前の cd が失敗していれば別の場所（f.repo/sub）を指す。
+		"set -e; cd " + missing + " && true; cd sub; git reset --hard",
+		"cd " + missing + "; cd sub && git reset --hard",
+	} {
+		expectDeny(t, command, f.repo, unresolved)
+	}
+	if refExists(f.repo, snapshotRef) {
+		t.Error("the commands above must not create a snapshot")
+	}
+	// 絶対パスの -C は、失敗したかもしれない cd に依らない。
+	expectPass(t, "cd "+missing+"; git -C "+f.repo+" reset --hard", f.clone)
+	if !refExists(f.repo, snapshotRef) {
+		t.Error("the absolute -C target must be saved")
+	}
+}
+
+// scratchpad の中の symlink が外のリポジトリを指していれば、外として扱う。同じコマンドで symlink を作る形は特定できないものとする。
+func TestScratchpadSymlinkToOutside(t *testing.T) {
+	f := newScratchFixture(t)
+	link := filepath.Join(f.sp, "link")
+	if err := os.Symlink(f.repo, link); err != nil {
+		t.Fatal(err)
+	}
+	checkProtected(t, f.clone, "git -C "+link+" reset --hard")
+	if !refExists(f.repo, snapshotRef) {
+		t.Error("the repository behind the symlink must be saved")
+	}
+	expectDeny(t, "ln -s "+f.repo+" "+f.sp+"/new && git -C "+f.sp+"/new reset --hard", f.clone, unresolved)
+	expectDeny(t, "git -C "+f.sp+"/../../other-session/scratchpad/x reset --hard", f.clone, unresolved)
+}
+
+// scratchpad の中の git ディレクトリでも、作業ツリーが外にあれば snapshot の対象にする（通さずに保存を試みる）。
+func TestScratchpadWorktreeOutsideIsNotExempt(t *testing.T) {
+	f := newScratchFixture(t)
+	gitRun(t, f.clone, "config", "core.worktree", f.repo)
+	// snapshot は作業ツリー（rev-parse --show-toplevel の先）で取る。
+	got := runHook(t, "git -C "+f.clone+" reset --hard", f.clone)
+	if got.Decision == "" && !refExists(f.repo, snapshotRef) {
+		t.Errorf("a work tree outside the scratchpad must not pass without a snapshot: %+v", got)
+	}
+}
+
+// /tmp と /private/tmp のような symlink の別名でも、同じ scratchpad として扱う。
+func TestScratchpadRootSymlink(t *testing.T) {
+	f := newScratchFixture(t)
+	alias := filepath.Join(filepath.Dir(f.root), "tmpalias")
+	if err := os.Symlink(f.root, alias); err != nil {
+		t.Fatal(err)
+	}
+	scratchRoot = alias
+	aliased := strings.Replace(f.clone, f.root, alias, 1)
+	for _, command := range []string{
+		"git -C " + aliased + " reset --hard",
+		"git -C " + f.clone + " reset --hard",
+	} {
+		checkProtected(t, f.repo, command)
+	}
+	if refExists(f.clone, snapshotRef) {
+		t.Error("a discard inside the scratchpad must not take a snapshot")
+	}
+}
+
+// Codex とデバッグ経路は scratchpad の判定をしない（変数の展開はする）。
+func TestScratchpadIsClaudeOnly(t *testing.T) {
+	f := newScratchFixture(t)
+	command := "D=" + f.clone + "; git -C $D reset --hard"
+	if got := hooktest.Stdin(t, Definition(), codexPayload(command, f.repo)); got.Decision != "" {
+		t.Errorf("codex: %+v", got)
+	}
+	if !refExists(f.clone, snapshotRef) {
+		t.Error("codex must save the clone")
+	}
+	before := gitRun(t, f.clone, "rev-parse", snapshotRef)
+	writeFile(t, filepath.Join(f.clone, "tracked.txt"), "v3\n")
+	if got := hooktest.Argv(t, Definition(), command); got.Decision != "" {
+		t.Errorf("argv: %+v", got)
+	}
+	if after := gitRun(t, f.clone, "rev-parse", snapshotRef); after == before {
+		t.Error("argv must save the clone")
+	}
+}
+
+func TestNewScratchpad(t *testing.T) {
+	for _, testCase := range []struct {
+		session, transcript string
+		want                bool
+	}{
+		{testSession, "/Users/alice/.claude/projects/x/" + testSession + ".jsonl", true},
+		{"", "/dev/null", false},
+		{"..", "/dev/null", false},
+		{"a/b", "/dev/null", false},
+		{testSession, "/Users/alice/.codex/sessions/rollout-2026-" + testSession + ".jsonl", false},
+	} {
+		if got := newScratchpad(testCase.session, testCase.transcript).session != ""; got != testCase.want {
+			t.Errorf("newScratchpad(%q, %q) = %v", testCase.session, testCase.transcript, got)
+		}
+	}
+	f := newScratchFixture(t)
+	s := newScratchpad(testSession, "/dev/null")
+	for path, want := range map[string]bool{
+		f.sp:                      true,
+		f.sp + "/x/y":             true,
+		f.sp + "/../scratchpad/x": true,
+		f.sp + "x":                false,
+		f.sp + "/..":              false,
+		f.other + "/x":            false,
+		filepath.Dir(f.sp):        false,
+		f.repo:                    false,
+		strings.Replace(f.sp, "claude-", "claude-x", 1): false,
+	} {
+		if got := s.contains(path); got != want {
+			t.Errorf("contains(%q) = %v, want %v", path, got, want)
+		}
+	}
+	if (scratchpad{}).contains(f.sp) {
+		t.Error("the zero scratchpad must contain nothing")
+	}
+}
+
+// --- L2: 変数と here-document の部品 -----------------------------------------
+
+func TestResolveExpandsVariablesAssignedInTheCommand(t *testing.T) {
+	f := newResolveFixture(t)
+	sub := filepath.Join(f.a, "sub")
+	t.Setenv("HOME", f.tmp)
+	assertTargets(t, "D="+f.b+"; git -C $D reset --hard", f.a, f.b)
+	assertTargets(t, "S="+f.a+"; D=$S/sub; cd $D && git reset --hard", f.b, sub)
+	assertTargets(t, "S="+f.a+" D=${S}/sub; git -C \"$D\" clean -fd", f.b, sub)
+	assertTargets(t, "R=~/a; git -C $R reset --hard", f.b, f.a)
+	assertTargets(t, "R=sub; git -C $R reset --hard", f.a, sub)
+	assertTargets(t, "R=sub; cd $R; cd ..; git -C ./$R reset --hard", f.a, sub)
+	assertTargets(t, "R='"+f.b+"'; git -C $R reset --hard", f.a, f.b)
+	assertTargets(t, "git -C '"+f.b+"' reset --hard", f.a, f.b)
+	// クォートの中の空白や区切り文字で分かれた断片をつなぐと元のパスと違いうるので、別のディレクトリ（a b）があっても追わない。
+	mkdir(t, filepath.Join(f.a, "a b"))
+	for _, command := range []string{
+		"git -C 'a  b' reset --hard",
+		`cd "a;b" && git reset --hard`,
+		"cd 'a　b' && git reset --hard",
+		"D='a  b'; git -C \"$D\" reset --hard",
+	} {
+		if got, err := resolveTargetDirs(command, f.a); got != nil || err != nil {
+			t.Errorf("%q must be unresolved: %v, %v", command, got, err)
+		}
+	}
+	// 使う時点でまだ代入していない変数や、値が変わりうる変数は追わない。
+	for _, command := range []string{
+		"git -C $D reset --hard; D=" + f.b,
+		"D=" + f.b + "; D=" + f.a + "; git -C $D reset --hard",
+		"D=" + f.b + "\nfunction f { D=" + f.a + "; }\nf\ngit -C $D reset --hard",
+	} {
+		if got, err := resolveTargetDirs(command, f.a); got != nil || err != nil {
+			t.Errorf("%q must be unresolved: %v, %v", command, got, err)
+		}
+	}
+}
+
+func TestTrustedNames(t *testing.T) {
+	// パスやフラグの一部（H/I、J.txt、-c、user.name）は名前として数えない（数えなければ信用もしない）。
+	got := trustedNames("S=/x; D=$S/y; cd ${S}; git -C $D -c user.name=x reset; for n in 1; do E=$n; done; F=1; F=2; G=${G:-1}; echo H/I J.txt")
+	for name, want := range map[string]bool{
+		"S": true, "D": true, "n": true, "E": true, "F": false, "G": false, "name": false, "user": false, "c": false,
+		"H": false, "I": false, "J": false,
+	} {
+		if got[name] != want {
+			t.Errorf("trusted[%q] = %v, want %v", name, got[name], want)
+		}
+	}
+}
+
+func TestExpandWord(t *testing.T) {
+	t.Setenv("HOME", "/Users/alice")
+	vars := map[string]string{"S": "/s", "SP": "/a b", "E": "", "G": "/x*"}
+	for _, testCase := range []struct {
+		word     string
+		assigned bool
+		want     string
+		ok       bool
+	}{
+		{"$S/x", false, "/s/x", true},
+		{"${S}x", false, "/sx", true},
+		{`"$S"/'y z'`, false, "/s/y z", true},
+		{`"${SP}"`, false, "/a b", true},
+		{"$SP", false, "", false},
+		{"$SP", true, "/a b", true},
+		{"$G", false, "", false},
+		{`"$G"`, false, "/x*", true},
+		{"$E", false, "", false},
+		{`"$E"`, false, "", false},
+		{"$U", false, "", false},
+		{"$1", false, "", false},
+		{"${S:-x}", false, "", false},
+		{"~/x", true, "/Users/alice/x", true},
+		{"~", false, "/Users/alice", true},
+		{"a~", false, "", false},
+		{`"~/x"`, false, "~/x", true},
+		{`"\$S"`, false, "", false},
+		{"'x", false, "", false},
+		{`"x`, false, "", false},
+		{"x/*", false, "", false},
+	} {
+		got, ok := expandWord(testCase.word, vars, testCase.assigned)
+		if got != testCase.want || ok != testCase.ok {
+			t.Errorf("expandWord(%q, %v) = %q, %v; want %q, %v", testCase.word, testCase.assigned, got, ok, testCase.want, testCase.ok)
+		}
+	}
+}
+
+func TestErrexitFlag(t *testing.T) {
+	for command, want := range map[string]string{
+		"set -e": "on", "set -eu": "on", "set -euo pipefail": "on", "set -o errexit": "on", "set -uo pipefail -e": "on",
+		"set +e": "off", "set +o errexit": "off", "set -u": "none", "set -o pipefail": "none", "set -- -e": "none", "set x -e": "none",
+	} {
+		on, ok := errexitFlag(py.Fields(command), 1)
+		got := map[bool]string{true: "on", false: "off"}[on]
+		if !ok {
+			got = "none"
+		}
+		if got != want {
+			t.Errorf("%q: %s, want %s", command, got, want)
+		}
+	}
+}
+
+func TestSeparatorClassifiers(t *testing.T) {
+	for seps, want := range map[string]bool{"": true, "&&": true, "&&\n": true, "&&(": true, ")&&": true, ";": false, "\n": false, "||": false, "|": false, "&": false} {
+		if got := onlyAndThen(seps); got != want {
+			t.Errorf("onlyAndThen(%q) = %v", seps, got)
+		}
+	}
+	for seps, want := range map[string]bool{"&&": false, "||": false, ";": false, "|": true, "&": true, "&\n": true, "&&|": true} {
+		if got := hasLonePipeOrAmpersand(seps); got != want {
+			t.Errorf("hasLonePipeOrAmpersand(%q) = %v", seps, got)
+		}
+	}
+}
+
+func TestStripFileHeredocs(t *testing.T) {
+	for _, testCase := range []struct {
+		command, want string
+		bodies        []string
+	}{
+		{"cat > a.sh <<'EOF'\ngit reset --hard\nEOF\necho ok", "cat > a.sh <<'EOF'\nEOF\necho ok", nil},
+		{"cat >a.sh <<-EOF\n\tgit reset --hard\n\tEOF\n", "cat >a.sh <<-EOF\n\tEOF\n", nil},
+		{"cat <<\"EOF\" >> x/a.sh\ngit reset --hard\nEOF", "cat <<\"EOF\" >> x/a.sh\nEOF", nil},
+		{"tee -a a.sh <<EOF\ngit reset --hard\nEOF", "tee -a a.sh <<EOF\nEOF", nil},
+		// 閉じない本文は末尾まで。
+		{"cat > a.sh <<'EOF'\ngit reset --hard", "cat > a.sh <<'EOF'\n", nil},
+		// 実行されうる本文は残す。
+		{"bash <<'EOF'\ngit reset --hard\nEOF", "", []string{"git reset --hard\n"}},
+		{"cat <<'EOF' | sh\ngit reset --hard\nEOF", "", []string{"git reset --hard\n"}},
+		{"cat <<'EOF'\ngit reset --hard\nEOF", "", []string{"git reset --hard\n"}},
+		{"cat 2>&1 <<'EOF'\ngit reset --hard\nEOF", "", []string{"git reset --hard\n"}},
+		{"x=$(cat > a <<'EOF'\ngit reset --hard\nEOF\n)", "", []string{"git reset --hard\n"}},
+		{"cat > >(sh) <<'EOF'\ngit reset --hard\nEOF", "", []string{"git reset --hard\n"}},
+		{"cat > a.sh <<EOF\n$(git reset --hard)\nEOF", "", []string{"$(git reset --hard)\n"}},
+		{"cat > a.sh <<EOF\n`git reset --hard`\nEOF", "", []string{"`git reset --hard`\n"}},
+		{"cat > a.sh <<'EOF'\ngit reset --hard\nEOF\nsh ./a.sh", "", []string{"git reset --hard\n"}},
+		// 演算子ではない <<。
+		{"echo '<<EOF'\ngit reset --hard", "", nil},
+		{"cat <<< x\ngit reset --hard", "", nil},
+		{"echo x # <<EOF\ngit reset --hard", "", nil},
+		// 1 行に 2 つ。書き出す方だけを外す。
+		{"cat > a.txt <<A; bash <<B\nx\nA\ny\nB\nz", "cat > a.txt <<A; bash <<B\nA\ny\nB\nz", []string{"y\n"}},
+		// 書き出すファイルの名前が本文の外にもう一度現れれば（短い名前の偶然の一致を含む）残す。
+		{"cat > a <<A; bash <<B\nx\nA\ny\nB\nz", "", []string{"x\n", "y\n"}},
+	} {
+		got, bodies := stripFileHeredocs(testCase.command)
+		want := testCase.want
+		if want == "" {
+			want = testCase.command
+		}
+		if got != want {
+			t.Errorf("%q: stripped %q, want %q", testCase.command, got, want)
+		}
+		var texts []string
+		for _, body := range bodies {
+			texts = append(texts, got[body.start:body.end])
+		}
+		if !reflect.DeepEqual(texts, testCase.bodies) {
+			t.Errorf("%q: bodies %q, want %q", testCase.command, texts, testCase.bodies)
+		}
 	}
 }

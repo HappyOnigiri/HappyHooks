@@ -26,12 +26,15 @@ var messages = i18n.Register(i18n.Catalog{
 
 Reason: This operation discards uncommitted changes, but which repository it targets
         cannot be determined statically from cd or git -C, so no restore snapshot can
-        be taken. The hook cannot follow paths that contain variables, globs, or quotes,
-        paths that do not exist when the hook runs, pushd / popd, sh -c, and overrides
-        via GIT_DIR / --git-dir / --work-tree.
+        be taken. The hook cannot follow globs, paths that do not exist when the hook
+        runs, pushd / popd, sh -c, here-documents fed to a shell, overrides via
+        GIT_DIR / --git-dir / --work-tree, and variables other than those assigned a
+        value once, unconditionally, earlier in the same command.
 
 Action: Rewrite it as follows, and it will pass after a snapshot is taken.
-        1. Give the cd / git -C paths as literals, not variables (several cd are fine)
+        1. Give the cd / git -C paths as literals, or as variables assigned a literal
+           once earlier in the same command (D=/abs/path; git -C $D ...), not inside
+           if / for and not after && / || (several cd are fine)
         2. Do not use sh -c or pushd; run the discarding command as its own Bash call
         If you only want to write it as text without running it, use a file editing tool.
         A cp backup or a different command to get around this block takes no snapshot,
@@ -41,12 +44,15 @@ Action: Rewrite it as follows, and it will pass after a snapshot is taken.
 		JA: `❌ ブロック: {{.Label}}
 
 理由: 未コミットの変更を破棄する操作ですが、cd や git -C でどのリポジトリが対象か
-      静的に特定できず、復元用スナップショットを作れません。追えないのは、変数・glob・
-      クォートを含むパス、フック実行時に存在しないパス、pushd / popd、sh -c 経由、
-      GIT_DIR / --git-dir / --work-tree による差し替えです。
+      静的に特定できず、復元用スナップショットを作れません。追えないのは、glob、
+      フック実行時に存在しないパス、pushd / popd、sh -c 経由、シェルへ流し込む
+      ヒアドキュメント、GIT_DIR / --git-dir / --work-tree による差し替えと、
+      同じコマンドの前の方で条件なしに 1 回だけ代入した変数以外の変数です。
 
 対応: 次のように書き直せば、スナップショットを作ってから通ります。
-      1. cd / git -C のパスを変数ではなくリテラルで書く (cd は複数回あってよい)
+      1. cd / git -C のパスをリテラルか、同じコマンドの前の方でリテラルを 1 回だけ
+         代入した変数で書く (D=/abs/path; git -C $D ...)。代入は if / for の中や
+         && / || の後に置かない (cd は複数回あってよい)
       2. sh -c や pushd を使わず、破棄コマンドを単独の Bash 呼び出しにする
       実行せず文字列として書きたいだけなら、ファイルを編集するツールを使ってください。
       cp 退避や別コマンドでの迂回はスナップショットを作らないので代替になりません。
