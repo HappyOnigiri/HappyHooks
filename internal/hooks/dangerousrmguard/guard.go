@@ -263,9 +263,11 @@ var (
 	redirectHeadRE     = regexp.MustCompile(`^[` + py.Digit + `&]*[<>]`)
 	redirectOnlyRE     = regexp.MustCompile(`^(?:[0-9]+|&)?(?:>>?[|&]?|<<?<?|<>)\z`)
 	// rmWordRE は `\brm(?:dir)?\b` である。両端の \b は語の文字 r・m（r）の外側にあるので、1 文字を消費する形で書ける。
-	rmWordRE  = regexp.MustCompile(py.NotWordOrStart + `rm(?:dir)?` + py.NotWordOrEnd)
-	cdWordRE  = regexp.MustCompile(`^` + assignments + `(?:cd|chdir|pushd|popd)(?:` + py.Space + `|\z)`)
-	globCharE = regexp.MustCompile(`[*?\[]`)
+	rmWordRE = regexp.MustCompile(py.NotWordOrStart + `rm(?:dir)?` + py.NotWordOrEnd)
+	// leadingKeywordsRE は断片の先頭に続く予約語の並びである。`do ! rm` のように重なる形も外す。
+	leadingKeywordsRE = regexp.MustCompile(`^(?:(?:do|then|else|elif|if|while|until|coproc|!|\{)` + py.Space + `+)+`)
+	cdWordRE          = regexp.MustCompile(`^` + assignments + `(?:cd|chdir|pushd|popd)(?:` + py.Space + `|\z)`)
+	globCharE         = regexp.MustCompile(`[*?\[]`)
 	// Python の $ は末尾の改行の直前にも一致するので、\n?\z で同じ意味にする。
 	globTailRE      = regexp.MustCompile(`(?:/\*+)+/*(\n?)\z`)
 	dotdotRE        = regexp.MustCompile(`(?:^|/)\.\.(?:/|\n?\z)`)
@@ -591,7 +593,7 @@ type removal struct {
 func removalSegments(command, substitute string) []removal {
 	var found []removal
 	for _, segment := range segmentRE.Split(flatten(command, substitute), -1) {
-		head := py.LStrip(segment)
+		head := stripLeadingKeywords(py.LStrip(segment))
 		match := l6vRE.FindStringSubmatchIndex(head)
 		if match == nil {
 			continue
@@ -603,6 +605,16 @@ func removalSegments(command, substitute string) []removal {
 		found = append(found, removal{name: name, args: whitespaceRE.Split(head[match[1]:], -1)})
 	}
 	return found
+}
+
+// stripLeadingKeywords は断片の先頭の制御構文の予約語（`do` `then` `if` `!` `{` など）を外す。
+// 移植元は外さず、`for v in a b; do rm -rf $S/$v; done` を素通りさせていた。組み込みは tree-sitter の AST で
+// 予約語の外にある rm を見るので ask になり、bypass でもユーザーの手が止まる。ここで外して先回りの deny を揃える。
+func stripLeadingKeywords(head string) string {
+	if match := leadingKeywordsRE.FindStringIndex(head); match != nil {
+		return head[match[1]:]
+	}
+	return head
 }
 
 // hasDirectoryChange は組み込みの J7r() 相当である。cd / pushd / popd / chdir を含むかを返す。
@@ -664,13 +676,7 @@ func findDangerousRemoval(command string) (name, target string) {
 func findDerivedVariableRemoval(command string) (name, target string) {
 	derived := make(map[string]bool)
 	for _, segment := range segmentRE.Split(flatten(command, " "), -1) {
-		head := py.LStrip(segment)
-		for _, keyword := range []string{"do", "then", "else"} {
-			if strings.HasPrefix(head, keyword+" ") {
-				head = py.LStrip(head[len(keyword):])
-				break
-			}
-		}
+		head := stripLeadingKeywords(py.LStrip(segment))
 		if match := assignmentRE.FindStringSubmatch(head); match != nil {
 			derived[match[1]] = derivedRootRE.MatchString(match[2])
 		}
