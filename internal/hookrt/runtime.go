@@ -123,6 +123,18 @@ func (c *Context) Deny(reason string) {
 	}})
 }
 
+// DenyPermission は PermissionRequest の拒否を出力する。message は理由文として Claude に渡る。
+// interrupt は付けない（付けると Claude の作業ごと止まる）。PermissionRequest は Claude Code にしか無い。
+func (c *Context) DenyPermission(message string) {
+	c.setJSON(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PermissionRequest",
+		"decision": map[string]any{
+			"behavior": "deny",
+			"message":  message,
+		},
+	}})
+}
+
 // AddContext は event の additionalContext としてコンテキストへ注入する文字列を出力する。
 func (c *Context) AddContext(event, text string) {
 	c.setJSON(map[string]any{"hookSpecificOutput": map[string]any{

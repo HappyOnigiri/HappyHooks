@@ -47,6 +47,19 @@ func TestDenyOutputSchema(t *testing.T) {
 	}
 }
 
+// PermissionRequest の拒否は decision.behavior で返し、interrupt は付けない。
+func TestDenyPermissionOutputSchema(t *testing.T) {
+	definition := &Definition{Name: "d", DefaultEnabled: true, Run: func(c *Context) error {
+		c.DenyPermission("blocked <&>")
+		return nil
+	}}
+	output := invoke(definition, `{"tool_name":"Bash"}`)
+	want := `{"hookSpecificOutput":{"decision":{"behavior":"deny","message":"blocked <&>"},"hookEventName":"PermissionRequest"}}` + "\n"
+	if output != want {
+		t.Fatalf("output=%q, want %q", output, want)
+	}
+}
+
 func TestAddContextAndPrint(t *testing.T) {
 	add := &Definition{Name: "a", DefaultEnabled: true, Run: func(c *Context) error {
 		c.AddContext("PostToolUse", "note")
