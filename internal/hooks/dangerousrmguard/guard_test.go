@@ -139,6 +139,24 @@ func TestEmptyVariableInvocationForms(t *testing.T) {
 	))
 }
 
+// 制御構文の予約語の後ろの rm。組み込みは AST で見て ask にするので、予約語を外して判定する。
+func TestEmptyVariableAfterKeywords(t *testing.T) {
+	check(t, hooktest.Deny, denyAll(labelEmptyVar,
+		// 実際に ask で止まったコマンドの形。
+		"S=/private/tmp/scratchpad; W=/tmp/wt; for v in P R; do rm -rf $S/$v; mkdir -p $S/$v; cp -R $S/base/plugins $S/$v/; done",
+		`for v in a b; do rm -rf "$S/$v"; done`, "while true; do rm -rf $DIR/*; done", "until false; do rm -rf $DIR/*; done",
+		"if true; then rm -rf $DIR/*; fi", "if false; then :; else rm -rf $DIR/*; fi",
+		"if false; then :; elif true; then rm -rf $DIR/*; fi", "if rm -rf $DIR/*; then :; fi",
+		"! rm -rf $DIR/*", "for v in a; do ! rm -rf $DIR/*; done", "for v in a; do { rm -rf $DIR/*; }; done",
+		"for v in a\ndo\trm -rf $DIR/*\ndone",
+	))
+	check(t, "", hooktest.Commands(
+		"for v in a b; do rm -rf /tmp/work/$v; done", "for v in a b; do rm -rf $BASE/build; done",
+		`for v in a b; do rm -rf "${S:?}/$v"; done`, "for v in a b; do echo rm -rf $S/$v; done",
+		"do_rm $DIR/*", "if_rm $DIR/*",
+	))
+}
+
 func TestEmptyVariableOptionsAndRedirects(t *testing.T) {
 	check(t, hooktest.Deny, hooktest.Commands(
 		"rm -rf -- $DIR/*", "rm -rf 2>/dev/null $DIR/*", "rm -rf 2> /dev/null $DIR/*", "rm -rf $DIR/* > log.txt",
