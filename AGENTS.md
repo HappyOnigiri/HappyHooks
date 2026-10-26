@@ -8,6 +8,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `hhx hook <name>` はどの経路でも終了コード 0 で終わる（名前を省いた手入力は usage を出して 2）。未知の名前・壊れた設定・本体のエラーや panic は無出力にする（fail-open）。
 - PreToolUse を通すときは判断を出力しない。`allow` と `ask` は返さない（`ask` は Codex が解釈しない）。
   注入系の hook（agents-local-context など）は判断のフィールドを持たない additionalContext と systemMessage だけを返す。
+- PermissionRequest（Claude Code だけ）は `decision.behavior` の `deny` だけを返し、`allow` と `interrupt` は返さない（`Context.DenyPermission`）。
+  無出力で終わると確認画面が残るので、fail-open は「従来どおり確認が出る」側に倒れる。
 - `hhx install` / `uninstall` は hhx のエントリ（先頭トークンの basename が `hhx`、2 番目が `hook`）だけを扱う。
   wx や利用者の hook は、同じグループにも入れないし消しもしない。
 - install は冪等で、hhx のエントリに変化が無ければファイルに触らない。
@@ -29,7 +31,7 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `internal/hooks/<name>`: hook 本体。1 hook 1 パッケージ（下の「hook の移植の型」）
 - `internal/pycompat`: Python の `\s`・`\d`・`\b`・`str.split()`・`splitlines()`・`str.lower()`・`json.dumps`・`os.path`・`shlex` の再現
 - `internal/hookexec`: hook から git・gh を時間の上限付きで起動する。gh は PATH から探すので、テストでは偽の gh で差し替えられる
-- `internal/hookcache`: 失っても害のない hook の状態（取得のキャッシュ・注入済みの記録）の置き場（`$XDG_CACHE_HOME/hhx/<hook>`）
+- `internal/hookcache`: 失っても害のない hook の状態（取得のキャッシュ・注入済みの記録・permission-request-guard が拒否したコマンドの記録）の置き場（`$XDG_CACHE_HOME/hhx/<hook>`）
 - `internal/toolresponse`: PostToolUse の実行結果（tool_response）の成功の判定。push-ci-context と pr-body-staleness が共有する
 - `internal/hooktest`: hook のテストの補助（テストからだけ使う）。偽の gh と、
   HOME・作業ディレクトリ・git の設定を隔離する `Main` を持つ

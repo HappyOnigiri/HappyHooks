@@ -161,6 +161,7 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	claude := strings.Join([]string{
+		"PermissionRequest [Bash] permission-request-guard",
 		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=30 statusMessage=Checking PR body freshness..., " +
 			"generated-edit-guard",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +

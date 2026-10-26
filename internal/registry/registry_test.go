@@ -12,7 +12,7 @@ var namePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 // 各 CLI で登録を確認済みのイベント名。綴りを誤ったイベントは CLI に黙って無視されるため、ここにあるものだけを許す。
 // 別のイベントへ登録する hook を足すときは、その CLI が受け付けることを確かめてから追加する。
 var knownEvents = map[hookrt.Agent]map[string]bool{
-	hookrt.Claude: {"PreToolUse": true, "PostToolUse": true, "UserPromptSubmit": true, "SessionStart": true, "SessionEnd": true},
+	hookrt.Claude: {"PermissionRequest": true, "PreToolUse": true, "PostToolUse": true, "UserPromptSubmit": true, "SessionStart": true, "SessionEnd": true},
 	hookrt.Codex:  {"PreToolUse": true, "PostToolUse": true, "UserPromptSubmit": true, "SessionStart": true, "SessionEnd": true, "SubagentStart": true},
 }
 

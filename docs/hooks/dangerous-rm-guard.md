@@ -32,4 +32,5 @@ parser cannot read a command, even without `rm` in it. The hook denies the two f
 Inside single quotes, `$'...'`, comments, and quoted heredocs, these are not expansions and are left alone.
 Other forms that Claude Code's parser cannot read are not covered.
 
-Other checks may differ from newer versions.
+Other checks may differ from newer versions. [`permission-request-guard`](permission-request-guard.md) denies
+what this hook misses and logs it.
