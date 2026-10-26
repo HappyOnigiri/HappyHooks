@@ -23,6 +23,7 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 | [`irreversible-guard`](docs/hooks/irreversible-guard.ja.md) | 元に戻せない操作を止める | 有効 |
 | [`generated-edit-guard`](docs/hooks/generated-edit-guard.ja.md) | 自動生成ファイルの手編集を止める | 有効 |
 | [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.ja.md) | Claude Code の確認待ちになる危険な `rm` を先に止める | 有効（Claude Code） |
+| [`permission-request-guard`](docs/hooks/permission-request-guard.ja.md) | 承認待ちになる Bash コマンドを拒否して記録する | 有効（Claude Code） |
 | [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.ja.md) | バックグラウンドのエージェントが終わるまでプランモードを維持する | 有効（Claude Code） |
 | [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.ja.md) | Git の hook 設定の変更を止める | 有効 |
 | [`pr-context`](docs/hooks/pr-context.ja.md) | プロンプト中の PR の情報を注入する | 有効 |

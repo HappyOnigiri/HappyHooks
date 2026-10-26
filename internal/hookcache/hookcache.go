@@ -1,7 +1,7 @@
-// Package hookcache は、hook が失っても害のない状態（取得のキャッシュ、注入済みの記録）を置くディレクトリを決める。
+// Package hookcache は、hook が失っても害のない状態（取得のキャッシュ、注入済みの記録、拒否したコマンドの記録）を置くディレクトリを決める。
 //
 // 置き場所は `$XDG_CACHE_HOME/hhx/<hook 名>`（XDG_CACHE_HOME が絶対パスでなければ `~/.cache/hhx/<hook 名>`）である。
-// 消えても、再注入されるか compact 後の復元が 1 回欠けるだけなので、移行や退避はしない。
+// 消えても、再注入されるか compact 後の復元が 1 回欠けるか、取りこぼしを調べる材料が減るだけなので、移行や退避はしない。
 package hookcache
 
 import (

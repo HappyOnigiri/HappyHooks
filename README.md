@@ -23,6 +23,7 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 | [`irreversible-guard`](docs/hooks/irreversible-guard.md) | Blocks irreversible operations | On |
 | [`generated-edit-guard`](docs/hooks/generated-edit-guard.md) | Stops hand edits of generated files | On |
 | [`dangerous-rm-guard`](docs/hooks/dangerous-rm-guard.md) | Stops risky `rm` commands before Claude Code asks for confirmation | On (Claude Code) |
+| [`permission-request-guard`](docs/hooks/permission-request-guard.md) | Denies Bash commands that would wait for your approval, and logs them | On (Claude Code) |
 | [`exit-plan-subagent-guard`](docs/hooks/exit-plan-subagent-guard.md) | Keeps plan mode open until background agents finish | On (Claude Code) |
 | [`git-hookspath-guard`](docs/hooks/git-hookspath-guard.md) | Blocks changes to Git hook settings | On |
 | [`pr-context`](docs/hooks/pr-context.md) | Adds context about PR links in prompts | On |
