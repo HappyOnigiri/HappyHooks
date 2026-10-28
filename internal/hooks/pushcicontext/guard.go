@@ -306,12 +306,40 @@ func contains(tokens []string, values ...string) bool {
 // cancellingFlags は push を打ち消すフラグである。--dry-run は CI を起こさず、削除系は対象の CI を持たない。
 var cancellingFlags = []string{"--dry-run", "-n", "--delete", "-d"}
 
+// gitPushIndex は git のサブコマンドが push のとき、その位置を返す。
+// 引数全体から探すと stash push やオプションの値を誤認するため、大域オプションだけを飛ばす。
+func gitPushIndex(tokens []string) int {
+	index := 0
+	for index < len(tokens) && assignmentRE.MatchString(tokens[index]) {
+		index++
+	}
+	if index == len(tokens) || executable(tokens) != "git" {
+		return -1
+	}
+	for index++; index < len(tokens); index++ {
+		token := tokens[index]
+		switch token {
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env":
+			index++
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		if py.Lower(token) == "push" {
+			return index
+		}
+		return -1
+	}
+	return -1
+}
+
 // triggerKind は CI を起こす操作の種別を返す。
 func triggerKind(command string) kind {
 	for _, tokens := range commandSegments(command) {
 		lower := lowered(tokens)
 		name := executable(tokens)
-		if name == "git" && contains(lower, "push") {
+		if gitPushIndex(tokens) >= 0 {
 			// 打ち消しフラグは push にだけ効かせる。gh pr create の -d は draft で、draft の PR でも CI は動く。
 			if contains(lower, cancellingFlags...) {
 				continue
@@ -352,16 +380,7 @@ func isMainPush(input *invocation) bool {
 		}
 	}
 	for _, tokens := range commandSegments(input.command) {
-		if executable(tokens) != "git" || !contains(lowered(tokens), "push") {
-			continue
-		}
-		push := -1
-		for index, token := range tokens {
-			if py.Lower(token) == "push" {
-				push = index
-				break
-			}
-		}
+		push := gitPushIndex(tokens)
 		if push < 0 {
 			continue
 		}

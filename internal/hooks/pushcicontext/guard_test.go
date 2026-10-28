@@ -165,6 +165,27 @@ func TestMainPushDoesNotInject(t *testing.T) {
 	}
 }
 
+func TestStashPushDoesNotInject(t *testing.T) {
+	repos := newRepositories(t)
+	for _, command := range []string{
+		"git stash push",
+		"git stash push -m checkpoint",
+		"git -C /other/worktree stash push",
+		"GIT_TRACE=1 /usr/bin/git stash push",
+	} {
+		for _, codex := range []bool{false, true} {
+			if context, ok := inject(t, command, call{cwd: repos.github, codex: codex}); ok {
+				t.Errorf("%q (codex=%v) injected %q", command, codex, context)
+			}
+		}
+	}
+	// 先行する stash の push を、後続の実際の push と取り違えて main 判定しない。
+	hooktest.Git(t, repos.github, "symbolic-ref", "HEAD", "refs/heads/main")
+	if _, ok := inject(t, "git stash push; git push origin feature", call{cwd: repos.github}); !ok {
+		t.Fatal("a feature push after stash must inject even on main")
+	}
+}
+
 func TestCodexGetsTheCodeModeWaitLoop(t *testing.T) {
 	repos := newRepositories(t)
 	context, _ := inject(t, "git push origin HEAD", call{cwd: repos.github, codex: true})
@@ -331,7 +352,7 @@ func TestArgvPath(t *testing.T) {
 	if injection.Event != "PostToolUse" || !strings.Contains(injection.Context, "timeout:600000") {
 		t.Fatalf("argv must be treated as a successful PostToolUse: %+v", injection)
 	}
-	for _, command := range []string{"git status", "ls"} {
+	for _, command := range []string{"git status", "ls", "git stash push", "git -C /other/worktree stash push"} {
 		if got := hooktest.Output(t, Definition(), "", hooktest.Options{Args: []string{command}}); got != "" {
 			t.Errorf("argv %q must be silent: %q", command, got)
 		}
@@ -364,6 +385,11 @@ func TestTriggers(t *testing.T) {
 		"git push --force-with-lease origin feature",
 		"git push origin 61c6a6b:refs/heads/feature",
 		"git -C /other/worktree push origin HEAD",
+		"git -C push -c advice.pushUpdateRejected=false --no-pager push origin HEAD",
+		"git -C/other/worktree -cadvice.pushUpdateRejected=false push origin HEAD",
+		"git --git-dir push --work-tree /other/worktree push origin HEAD",
+		"git --git-dir=/other/repo.git --config-env=advice.pushUpdateRejected=ADVICE push origin HEAD",
+		"git stash push; git push origin feature",
 		"/usr/bin/git push",
 		"make build && git push",
 		"git commit -m 'x'; git push",
@@ -389,6 +415,14 @@ func TestTriggers(t *testing.T) {
 		"git push origin :feature",
 		"git status",
 		"git fetch origin",
+		"git stash push",
+		"git -C /other/worktree stash push",
+		"git log --oneline push",
+		"git -C push status",
+		"git -c push status",
+		"git --git-dir push status",
+		"git --config-env push status",
+		"git -C push",
 		"gh pr view 155",
 		"gh pr checks 155",
 		"gh workflow run --help",
