@@ -16,7 +16,8 @@
 
 準備と公開は [HappyOnigiri/ReleaseActions](https://github.com/HappyOnigiri/ReleaseActions) の共通 Action に任せ、hhx 側のワークフローは入力の受け口と成果物のビルドだけを持つ。
 
-1. `release.yml` を手動で実行すると、リリースブランチ（`release/vX.Y.Z`）と changelog を本文に持つリリース PR ができる。
+1. `release.yml` は定期実行または手動実行で、リリースブランチ（`release/vX.Y.Z`）と changelog を本文に持つリリース PR を作る。
+   定期実行と `automatic` を有効にした手動実行では、対象 PR がない場合や既存のリリース PR がある場合はスキップし、作成した PR は CI 成功後に同じコミットを指定して自動マージする。
 2. その PR を main へ merge すると、`publish-release.yml` が merge コミットを checkout して `make release` でビルドし、同じコミットにタグを打って 4 つの成果物を添付した Release を公開する。
    ビルドに使うタグはリリースブランチ名から取り出すので、成果物のバージョンは PR のブランチ名で決まる。
 3. main 宛の PR には、`release-reminder.yml` が前回のリリース以降に merge された PR の数を知らせる。
@@ -28,8 +29,8 @@
 
 ### 最初のリリース
 
-最初のリリースにはタグも GitHub Release も無く、`bump` が起点を持てない。
-`release.yml` を `version` に semver（例: `0.1.0`）を直接指定して実行する。
+最初のリリースでは、`bump: auto` は main の全マージ済み PR からバージョンを判定する。
+バージョンを指定したい場合は、`release.yml` の `version` に semver を直接指定して実行する。
 
 ```sh
 gh workflow run release.yml -f version=0.1.0
