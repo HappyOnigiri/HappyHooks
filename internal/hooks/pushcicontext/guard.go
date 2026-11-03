@@ -336,6 +336,9 @@ func gitPushIndex(tokens []string) int {
 
 // triggerKind は CI を起こす操作の種別を返す。
 func triggerKind(command string) kind {
+	if onlyWritesDocuments(command) {
+		return none
+	}
 	for _, tokens := range commandSegments(command) {
 		lower := lowered(tokens)
 		name := executable(tokens)
