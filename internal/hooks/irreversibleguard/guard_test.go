@@ -851,6 +851,75 @@ func TestOutputSchema(t *testing.T) {
 	}
 }
 
+// 移植元との違い: ファイルへ書き出すだけの here-document の本文は、このコマンドの中では実行されないので判定しない。
+func TestIgnoresHeredocWrittenToFile(t *testing.T) {
+	check(t, "", hooktest.Commands(
+		"cat > /tmp/v.sh <<'EOF'\nopenssl x509 -in a > $S/out/one.pem\nrm .envrc\nEOF",
+		"cat >> /tmp/v.sh <<\"EOF\"\ncat x > key.pem\nEOF",
+		"cat <<'EOF' > /tmp/v.sh\ngh auth logout\nEOF",
+		"cat > /tmp/v.sh <<EOF\nrm .envrc\nEOF",
+		"cat > /tmp/v.sh <<-'EOF'\n\trm .envrc\n\tEOF",
+		"tee /tmp/v.sh >/dev/null <<'EOF'\nnpm publish\nEOF",
+		"/bin/cat >/tmp/v.sh <<\\EOF\nrm ~/.ssh/id_rsa\nEOF\necho done",
+		// 複数の here-document と、後ろに続く安全なコマンド。
+		"cat > a.sh <<'A'\nrm .envrc\nA\ncat > b.sh <<'B'\nnpm publish\nB\nls",
+	))
+}
+
+// 本文を実行しうる形と、範囲を確かめられない形は、従来どおり本文も判定する。
+func TestStillChecksHeredocThatMayRun(t *testing.T) {
+	check(t, hooktest.Deny, []hooktest.Case{
+		// 書き出したスクリプトを同じコマンドで実行する。
+		{Command: "cat > /tmp/v.sh <<'EOF'\nrm .envrc\nEOF\nbash /tmp/v.sh", Label: labelSecretRM},
+		// シェルや他のコマンドへ流し込む。
+		{Command: "bash <<'EOF'\nrm .envrc\nEOF", Label: labelSecretRM},
+		{Command: "ssh host <<'EOF'\nrm .envrc\nEOF", Label: labelSecretRM},
+		// クォートしていない本文の $(...) とバッククォートは、外側のシェルが実行する。
+		{Command: "cat > /tmp/v.sh <<EOF\n$(rm .envrc)\nEOF", Label: labelSecretRM},
+		// 区切りの行が無い。
+		{Command: "cat > /tmp/v.sh <<'EOF'\nrm .envrc", Label: labelSecretRM},
+		// クォートの中の << は演算子ではない。本文と取り違えず、後ろのコマンドを判定する。
+		{Command: "echo \"a <<EOF\"\nrm .envrc\nEOF", Label: labelSecretRM},
+		// 本文の後ろのコマンドは判定する。
+		{Command: "cat > /tmp/v.sh <<'EOF'\nls\nEOF\nrm .envrc", Label: labelSecretRM},
+		// 書き出し先そのものが秘密ファイルなら、本文の外の演算子の行で判定する。
+		{Command: "cat > .envrc <<'EOF'\nexport A=1\nEOF", Label: labelSecretRedirect},
+	})
+}
+
+func TestStripWrittenHeredocs(t *testing.T) {
+	for command, want := range map[string]string{
+		"cat > a.sh <<'EOF'\nrm x\nEOF\nls":                    "cat > a.sh <<'EOF'\nEOF\nls",
+		"cat > a.sh <<'EOF'\nrm x\nEOF\nsh a.sh":               "cat > a.sh <<'EOF'\nrm x\nEOF\nsh a.sh",
+		"cat > d/a.sh <<'EOF'\nrm x\nEOF\n./a.sh":              "cat > d/a.sh <<'EOF'\nrm x\nEOF\n./a.sh",
+		"grep x <<'EOF'\nrm x\nEOF":                            "grep x <<'EOF'\nrm x\nEOF",
+		"cat > a.sh <<'A' && cat > b.sh <<'B'\n1\nA\n2\nB\nls": "cat > a.sh <<'A' && cat > b.sh <<'B'\nA\nB\nls",
+		// 名前は部分文字列で数えるので、短い名前は他の語に紛れて外さない側に倒れる。
+		"cat > a <<'EOF'\nrm x\nEOF": "cat > a <<'EOF'\nrm x\nEOF",
+		// クォートしていない本文のバッククォートは、外側のシェルが実行する。
+		"cat > a.sh <<EOF\n`x`\nEOF":            "cat > a.sh <<EOF\n`x`\nEOF",
+		"cat <<< 'rm x' > a":                    "cat <<< 'rm x' > a",
+		"cat > a.sh <<'EOF'\r\nrm x\r\nEOF\r\n": "cat > a.sh <<'EOF'\r\nEOF\r\n",
+	} {
+		if got := stripWrittenHeredocs(command); got != want {
+			t.Errorf("stripWrittenHeredocs(%q)=%q, want %q", command, got, want)
+		}
+	}
+}
+
+// DB の破壊は、ローカルの DB ファイル（sqlite3）もあるので、リモートの削除とは別の理由文にする。
+func TestDatabaseReason(t *testing.T) {
+	for command, id := range map[string]string{
+		"sqlite3 app.db 'DROP TABLE t'": idDB,
+		"mysqladmin drop mydb":          idMysqladmin,
+	} {
+		got := hooktest.Stdin(t, Definition(), hooktest.BashPayload(command, "/tmp", nil))
+		if want := reason(hooktest.Language, target{id: id}, idWhyDB); got.Reason != want {
+			t.Errorf("%s: reason=%q, want %q", command, got.Reason, want)
+		}
+	}
+}
+
 // Codex は ask を解釈しないので、判定は deny だけに揃える。
 func TestNeverUsesAsk(t *testing.T) {
 	check(t, hooktest.Deny, hooktest.Commands("gh auth logout", "npm publish", "rm .envrc", "trash ~/.codex/config.toml"))

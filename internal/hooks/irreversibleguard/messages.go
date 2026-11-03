@@ -12,6 +12,7 @@ const (
 
 	idWhyCred    = "irreversible-guard.why.credential"
 	idWhyRemote  = "irreversible-guard.why.remote"
+	idWhyDB      = "irreversible-guard.why.database"
 	idWhyPublish = "irreversible-guard.why.publish"
 	idWhyGit     = "irreversible-guard.why.git"
 	idWhyMachine = "irreversible-guard.why.machine"
@@ -109,6 +110,14 @@ var messages = i18n.Register(i18n.Catalog{
 	idWhyRemote: {
 		EN: "This permanently deletes a remote resource; it cannot be restored from history or a trash.",
 		JA: "リモートリソースの恒久削除で、履歴やゴミ箱からの復元ができません。",
+	},
+	// C 類のうちデータベースの破壊。DB はローカルのファイル（sqlite3）のこともあるので「リモート」と書かず、
+	// バックアップが無ければ戻せないことを伝える。
+	idWhyDB: {
+		EN: "This destroys database tables or data; without a backup they cannot be restored. " +
+			"This applies to a local database file as well.",
+		JA: "データベースのテーブルやデータの破壊で、バックアップが無ければ復元できません。" +
+			"ローカルの DB ファイルでも同じです。",
 	},
 	// B 類: 公開・取り下げは即座に伝播し、取り消せない。
 	idWhyPublish: {
