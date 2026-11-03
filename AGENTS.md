@@ -52,6 +52,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   - lint は Go（golangci-lint）・Markdown・ワークフロー（actionlint・zizmor）・シェル（shellcheck）を見る。
     ツールの版は `.tool-versions` に置く。手元では `shellcheck`（同じ版）と `pipx` が要る。
   - パッケージの依存の向き（hook どうしの import、hooktest はテストからだけ）は golangci-lint の depguard が検査する。
+  - 外部コマンドは `internal/hookexec` から起動する。`exec.Command` などの直接の起動は golangci-lint の forbidigo が検査し、
+    テスト・`internal/hooktest`・`tools/` は対象外とする。意図した例外は該当行の `//nolint:forbidigo` に理由を書く。
   - Action は commit の SHA で固定する。zizmor の指摘を意図して残すときは、該当行の `# zizmor: ignore[...]` に理由を書く。
 - CI のジョブは Makefile のターゲットを 1 つずつ走らせる。検査を足すときは Makefile に書き、`ci-checks` と `ci.yml` の matrix の両方へ足す。
 - CI のテストは citest 経由で走り、落ちたテストを 1 回だけ再実行する。再実行で通ったテストは CI を落とさず、

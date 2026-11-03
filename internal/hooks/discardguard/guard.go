@@ -1502,6 +1502,8 @@ func (r gitRunner) run(directory string, env []string, stdin string, args ...str
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), min(gitTimeout, remaining))
 	defer cancel()
+	// hookexec.Output は Env・stdin・stderr・停止のシグナルを渡せないので、ここで直接起動する。
+	//nolint:forbidigo // 一時 index の lock を消せるよう SIGTERM で止める必要があり、hookexec では代えられない
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", directory}, args...)...)
 	// 失敗の判別（not a git repository）を stderr の文面で行うので、git のメッセージを英語に固定する。
 	command.Env = append(append(os.Environ(), "LC_ALL=C"), env...)

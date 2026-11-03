@@ -30,6 +30,7 @@ linters:
     - makezero
     - cyclop
     - depguard
+    - forbidigo
 
   settings:
     gocritic:
@@ -77,6 +78,20 @@ linters:
           deny:
             - pkg: github.com/HappyOnigiri/hhx/internal/hooktest
               desc: hooktest is for tests only
+    # 外部コマンドは hookexec から時間の上限付きで起動する。hook が上限なしに git・gh を待つと、agent の操作ごと止まる。
+    # 第 1 引数（起動するコマンド）は見ず、起動の関数そのものを禁じる。意図した例外は該当行の nolint に理由を書く。
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^exec\.Command(Context)?$
+          pkg: ^os/exec$
+          msg: start external commands through internal/hookexec
+        - pattern: ^os\.StartProcess$
+          pkg: ^os$
+          msg: start external commands through internal/hookexec
+        - pattern: ^syscall\.(Exec|ForkExec|StartProcess)$
+          pkg: ^syscall$
+          msg: start external commands through internal/hookexec
     exhaustive:
       default-signifies-exhaustive: false
       check:
@@ -102,6 +117,9 @@ linters:
       # テストは JSON や設定の fixture を 1 行で持つことがあり、折り返すと検査の意味が変わる。
       - path: _test\.go
         linters: [funlen, lll]
+      # 起動の実体（hookexec）と、テスト・テストの補助・開発用のツールは外部コマンドを直接起動してよい。
+      - path: (_test\.go$|^internal/hookexec/|^internal/hooktest/|^tools/)
+        linters: [forbidigo]
 
 formatters:
   enable:
