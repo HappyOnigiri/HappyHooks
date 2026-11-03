@@ -10,6 +10,7 @@ const (
 	idLagging            = "pr-body-staleness.lagging"
 	idLaggingOnly        = "pr-body-staleness.lagging-only"
 	idTitle              = "pr-body-staleness.title"
+	idNoPR               = "pr-body-staleness.no-pr"
 )
 
 // sentenceEnders は文末とみなす記号である。設定の update-instruction の末尾がこれ以外なら、idSentenceEnd を足す。
@@ -69,6 +70,24 @@ var messages = i18n.Register(i18n.Catalog{
 	},
 	// idStale・idLaggingOnly の PR の行の後に足す、現在のタイトルの行。差分と突き合わせる対象を示す。
 	idTitle: {EN: "- Current title: {{.Title}}", JA: "- 現在のタイトル: {{.Title}}"},
+	// push の前に cd・git -C でディレクトリを移していて、hook が見た cwd の HEAD に open の PR が無かったときの文面。
+	// push 先のブランチの PR を調べられていないので、その PR のタイトルと本文を push したコミットと突き合わせさせる。
+	idNoPR: {
+		EN: "The push succeeded, but no open PR is linked to HEAD of the directory this hook inspects. " +
+			"The command changed directories (cd or git -C) before pushing, " +
+			"so the pushed branch may belong to a PR this hook did not check.\n" +
+			"- If the pushed branch has an open PR, " +
+			"check whether its title or body disagrees with the commits you just pushed " +
+			"(whether the title still describes the change, whether behavior that is not in the body was added, " +
+			"and whether what the body says it will do has changed).\n" +
+			"- {{.Instruction}} If the title and body match the diff, or the branch has no PR, " +
+			"no update is needed; just report that.",
+		JA: "push が成功したが、この hook が見たディレクトリの HEAD に紐づく open の PR は無かった。" +
+			"push の前に cd か git -C でディレクトリを移しているので、push したブランチの PR をこの hook は確認できていない可能性がある。\n" +
+			"- push したブランチに open の PR があれば、そのタイトルと本文がいま push したコミットの内容と食い違っていないか確認すること" +
+			"（タイトルが変更の中身を表しているか、本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
+			"- {{.Instruction}}タイトルと本文が差分と一致している、またはそのブランチに PR が無ければ更新は不要で、その旨だけ報告すればよい。",
+	},
 	// 文末の記号が無い update-instruction に足す記号。
 	idSentenceEnd: {EN: ".", JA: "。"},
 })

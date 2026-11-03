@@ -49,6 +49,10 @@ func pullRequest(over map[string]any) map[string]any {
 }
 
 func graphql(nodes ...any) map[string]any {
+	if nodes == nil {
+		// GitHub は PR が無いとき null ではなく空の配列を返す。
+		nodes = []any{}
+	}
 	return map[string]any{"data": map[string]any{"repository": map[string]any{"object": map[string]any{
 		"associatedPullRequests": map[string]any{"nodes": nodes}}}}}
 }
@@ -287,6 +291,8 @@ func TestSilentCases(t *testing.T) {
 			commit(before, "", 1), commit(after, "Merge remote-tracking branch 'origin/main'", 2)}}}))},
 		"no associated pull request": {graphql: graphql()},
 		"closed pull request":        {graphql: graphql(pullRequest(map[string]any{"state": "MERGED"}))},
+		"gh failure after cd":        {mode: "fail", options: call{command: "cd /other/worktree; git push origin HEAD"}},
+		"gh garbage after cd":        {mode: "garbage", options: call{command: "cd /other/worktree; git push origin HEAD"}},
 		"failed push":                {options: call{response: map[string]any{"stderr": "! [rejected]        main -> main (non-fast-forward)"}}, noGH: true},
 		"up-to-date push":            {options: call{response: map[string]any{"stderr": "Everything up-to-date"}}, noGH: true},
 		"pr create":                  {options: call{command: "gh pr create --fill"}, noGH: true},
@@ -330,6 +336,47 @@ func TestSilentCases(t *testing.T) {
 			} else if len(calls) > 1 {
 				// PR が無い・gh の失敗・不正な応答では、head の一致を待たない。
 				t.Fatalf("gh must not be retried: %+v", calls)
+			}
+		})
+	}
+}
+
+// cd や git -C を伴う push で open の PR が見つからなければ、汎用の案内を出す。
+// 出すのは GitHub が正常に応答して open の PR が 0 件のときだけで、gh の失敗や、cd を伴わない push では出さない。
+func TestNoPullRequestAfterChangingDirectory(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		command string
+		graphql any
+		want    bool
+	}{
+		"cd then push":           {command: "cd /other/worktree; git push origin HEAD", want: true},
+		"cd and && push":         {command: "cd /other/worktree && git push origin HEAD:feat 2>&1 | tail -5", want: true},
+		"subshell cd":            {command: "(cd /other/worktree && git push)", want: true},
+		"git -C":                 {command: "git -C /other/worktree push origin HEAD", want: true},
+		"only a merged PR":       {command: "cd /other/worktree; git push", graphql: graphql(pullRequest(map[string]any{"state": "MERGED"})), want: true},
+		"push without cd":        {command: "git push origin HEAD"},
+		"git -c is not -C":       {command: "git -c push.default=current push"},
+		"cd after the push":      {command: "git push; cd /other/worktree"},
+		"dry run after cd":       {command: "cd /other/worktree; git push --dry-run"},
+		"open PR found after cd": {command: "cd /other/worktree; git push", graphql: graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": []any{commit(before, "", 1)}}}))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			if testCase.graphql != nil {
+				f.write(t, "graphql.json", testCase.graphql)
+			} else {
+				f.write(t, "graphql.json", graphql())
+			}
+			context, ok := f.run(t, call{command: testCase.command})
+			if ok != testCase.want {
+				t.Fatalf("injected=%v, want %v\n%s", ok, testCase.want, context)
+			}
+			if ok {
+				want := messages.Text(hooktest.Language, idNoPR, map[string]any{
+					"Instruction": messages.T(hooktest.Language, idDefaultInstruction)})
+				if context != want {
+					t.Fatalf("context:\n%s\nwant:\n%s", context, want)
+				}
 			}
 		})
 	}
@@ -712,6 +759,24 @@ func TestMatchOrigin(t *testing.T) {
 	}
 }
 
+func TestPushesFromAnotherDirectory(t *testing.T) {
+	for command, want := range map[string]bool{
+		"cd /x; git push":           true,
+		"pushd /x && git push":      true,
+		"git -C /x push":            true,
+		"git push":                  false,
+		"git push; cd /x":           false,
+		"git -c a=b push":           false,
+		"cd /x; git push --dry-run": false,
+		"cd /x":                     false,
+		"echo cd; git push":         false,
+	} {
+		if got := pushesFromAnotherDirectory(command); got != want {
+			t.Errorf("%q: got %v, want %v", command, got, want)
+		}
+	}
+}
+
 func TestGate(t *testing.T) {
 	if !gate([]byte("git PUSH")) || gate([]byte("git status")) {
 		t.Fatal("the gate must look for push case-insensitively")
@@ -759,6 +824,10 @@ func TestMessageFitsTheCodexContextLimit(t *testing.T) {
 	pr := map[string]any{"number": json.Number("123456"), "title": strings.Repeat("あ", 256),
 		"url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
 	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
+		text := messages.Text(language, idNoPR, map[string]any{"Instruction": messages.T(language, idDefaultInstruction)})
+		if len(text) > limit {
+			t.Errorf("%s (no PR): %d bytes, over the limit %d", language, len(text), limit)
+		}
 		// 一覧の遅れの案内を足した文面が最も長い。
 		for _, lagging := range []bool{false, true} {
 			text, err := message(language, pr, headlines, messages.T(language, idDefaultInstruction), lagging)
