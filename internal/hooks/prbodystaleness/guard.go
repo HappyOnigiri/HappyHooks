@@ -127,9 +127,20 @@ func run(c *hookrt.Context) error {
 	if command == "" || !triggersPush(command) || !toolresponse.Succeeded(response) {
 		return nil
 	}
-	pullRequest, lagging, err := fetch(cwd)
-	if err != nil || pullRequest == nil {
+	pullRequest, lagging, missing, err := fetch(cwd)
+	if err != nil {
 		return err
+	}
+	if pullRequest == nil {
+		// open の PR が無い（gh の失敗や不正な応答は含めない）うえで、push の前にディレクトリを移していたときだけ案内する。
+		// hook が見るのは payload の cwd の HEAD で、push したブランチとは別のものを見ている可能性があるため。
+		if missing && pushesFromAnotherDirectory(command) {
+			var settings Settings
+			_ = c.Settings(&settings)
+			language := c.Language()
+			c.AddContext(event, messages.Text(language, idNoPR, map[string]any{"Instruction": settings.Instruction(language)}))
+		}
+		return nil
 	}
 	headlines, err := staleCommits(pullRequest)
 	if err != nil || (len(headlines) == 0 && !lagging) {
@@ -241,11 +252,25 @@ var cancellingFlags = map[string]bool{"--dry-run": true, "-n": true, "--delete":
 
 // triggersPush は PR の commit を増やす push が含まれるかを返す。
 func triggersPush(command string) bool {
+	pushes, _ := analyzePush(command)
+	return pushes
+}
+
+// pushesFromAnotherDirectory は、push の前にディレクトリを移している（先行するセグメントの cd・pushd、
+// または push と同じセグメントの git -C）かを返す。hook が見る cwd と push 先のリポジトリが違うことがある。
+func pushesFromAnotherDirectory(command string) bool {
+	_, moved := analyzePush(command)
+	return moved
+}
+
+// analyzePush は最初の push のセグメントについて、push があるかと、push の前にディレクトリを移しているかを返す。
+func analyzePush(command string) (pushes, moved bool) {
+	sawCd := false
 	for _, segment := range separatorRE.Split(command, -1) {
 		cleaned := punctuationRE.ReplaceAllString(segment, " ")
 		cleaned = redirectRE.ReplaceAllString(cleaned, " ")
 		tokens := py.Fields(cleaned)
-		isGit, hasPush, cancelled, deletes := false, false, false, false
+		isGit, hasPush, cancelled, deletes, hasC := false, false, false, false, false
 		for _, token := range tokens {
 			lower := py.Lower(token)
 			isGit = isGit || lower == "git" || strings.HasSuffix(lower, "/git")
@@ -253,12 +278,20 @@ func triggersPush(command string) bool {
 			cancelled = cancelled || cancellingFlags[lower]
 			// `git push origin :branch` は削除。通常の refspec と違いコロンで始まる。
 			deletes = deletes || strings.HasPrefix(token, ":")
+			// git のオプションの -C（大文字小文字を区別する。-c は設定の指定）。
+			hasC = hasC || token == "-C"
 		}
 		if isGit && hasPush && !cancelled && !deletes {
-			return true
+			return true, sawCd || hasC
+		}
+		if len(tokens) > 0 {
+			switch py.Lower(tokens[0]) {
+			case "cd", "pushd":
+				sawCd = true
+			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // run1 は git か gh を実行し、stdout の両端の空白を除いて返す。失敗・時間切れ・0 以外の終了なら ok は偽になる。
@@ -322,81 +355,86 @@ func isHostChar(char rune) bool {
 // fetch は push した HEAD に紐づく open の PR を返す。取れなければ nil を返す。
 // PR の head が HEAD と一致するまで retryInterval ごとに取り直し、waitLimit に達したら最後に取得した PR を
 // lagging を真にして返す。取り直しで gh が失敗したり PR が見つからなくなったりしたら、待つのをやめて nil を返す。
-func fetch(cwd string) (pullRequest map[string]any, lagging bool, err error) {
+//
+// missing は、最初の問い合わせで GitHub が正常に応答し、HEAD に紐づく open の PR が 1 件も無かったときだけ真になる。
+// gh の失敗・時間切れ・不正な応答・取り直しで PR が消えた場合は偽である。
+func fetch(cwd string) (pullRequest map[string]any, lagging, missing bool, err error) {
 	deadline := time.Now().Add(waitLimit)
 	owner, repo, ok := ownerRepo(cwd, deadline)
 	if !ok {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	sha, ok := run1(cwd, deadline, "git", "rev-parse", "HEAD")
 	if !ok || sha == "" {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	for {
-		next, err := fetchOnce(cwd, deadline, owner, repo, sha)
+		next, none, err := fetchOnce(cwd, deadline, owner, repo, sha)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		if next == nil {
 			// 期限で打ち切られた取り直しは gh の失敗ではないので、最後に取得した PR で判定する。
 			if pullRequest != nil && !time.Now().Before(deadline) {
-				return pullRequest, true, nil
+				return pullRequest, true, false, nil
 			}
-			return nil, false, nil
+			return nil, false, pullRequest == nil && none, nil
 		}
 		pullRequest = next
 		head, isString := pullRequest["headRefOid"].(string)
 		if !isString || head == "" {
 			// head の読めない応答では、待っても一致を確かめられない。
-			return nil, false, nil
+			return nil, false, false, nil
 		}
 		if head == sha {
-			return pullRequest, false, nil
+			return pullRequest, false, false, nil
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return pullRequest, true, nil
+			return pullRequest, true, false, nil
 		}
 		time.Sleep(min(retryInterval, remaining))
 	}
 }
 
 // fetchOnce は GitHub に 1 回問い合わせ、HEAD に紐づく open の PR を返す。取れなければ nil を返す。
-func fetchOnce(cwd string, deadline time.Time, owner, repo, sha string) (map[string]any, error) {
+// none は、応答が正常で PR の一覧に open のものが無かったときだけ真になる。
+func fetchOnce(cwd string, deadline time.Time, owner, repo, sha string) (pr map[string]any, none bool, err error) {
 	raw, ok := run1(cwd, deadline, "gh", "api", "graphql", "-f", "query="+query,
 		"-F", "owner="+owner, "-F", "repo="+repo, "-F", "sha="+sha)
 	if !ok || raw == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	payload, ok := decodeJSON(raw)
 	if !ok {
-		return nil, nil
+		return nil, false, nil
 	}
 	nodes := payload
 	for _, key := range []string{"data", "repository", "object", "associatedPullRequests", "nodes"} {
 		fields, ok := nodes.(map[string]any)
 		if !ok {
-			return nil, nil
+			return nil, false, nil
 		}
 		if nodes, ok = fields[key]; !ok {
-			return nil, nil
+			return nil, false, nil
 		}
 	}
 	switch typed := nodes.(type) {
 	case []any:
 		for _, node := range typed {
 			if fields, ok := node.(map[string]any); ok && fields["state"] == "OPEN" {
-				return fields, nil
+				return fields, false, nil
 			}
 		}
+		return nil, true, nil
 	case json.Number, bool:
 		// 移植元は for で回せない値で例外になる（真の数値と真偽値）。偽の値は `or []` で空になる。
 		if toolresponse.Truthy(typed) {
-			return nil, errPythonException
+			return nil, false, errPythonException
 		}
 	}
 	// オブジェクトと文字列は、回しても dict の要素が出てこないので見つからない。
-	return nil, nil
+	return nil, false, nil
 }
 
 // staleCommits は本文の最終更新より後の commit（merge commit を除く）の見出しを新しい順に返す。

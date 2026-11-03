@@ -27,3 +27,9 @@ The hook calls authenticated `gh` and gives up silently if it cannot obtain the 
 commit dates, so it may ask for a check when the body is still correct. When you push a branch other than the current `HEAD`, or when
 `HEAD` also belongs to another open PR (for example, stacked branches) that GitHub returns first, the head never matches,
 so the hook waits the full 20 seconds and reports the list as possibly outdated.
+
+The hook inspects the `HEAD` of the working directory the agent reports, not of the directory the command pushed from.
+When no open PR is linked to that `HEAD`, GitHub responded normally, and the push command changed directories first
+(`cd` or `pushd` in an earlier segment, or `git -C`), the hook adds a generic note instead of staying silent: the pushed
+branch may belong to a PR it did not check, so check that PR's title and body against the commits just pushed. It does not
+add this note when `gh` fails or when the command did not change directories.
