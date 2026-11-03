@@ -152,6 +152,7 @@ func appliedResult(tag, output string) (Applied, error) {
 // 新しいセッションで起動して制御端末を継承させない。hook の実行環境や agent の端末から
 // 秘密や入力待ちがインストーラーへ漏れないためである。
 func runInstaller(ctx context.Context, scriptPath string, output io.Writer) error {
+	//nolint:forbidigo // hook ではなく hhx update の実体で、環境の許可リストと新しいセッションを指定して起動する
 	command := exec.CommandContext(ctx, "bash", scriptPath)
 	command.Env = installerEnvironment()
 	command.Stdin = nil

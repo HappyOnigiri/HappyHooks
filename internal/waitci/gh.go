@@ -45,6 +45,8 @@ type ExecRunner struct{}
 func (ExecRunner) Run(name string, args []string, timeout time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// wait-ci は hook ではなく、stderr・終了コード・Python 互換のエラー文が出力の契約なので、hookexec を通さない。
+	//nolint:forbidigo // wait-ci の Runner の実体で、時間の上限は呼び出し側の timeout で付ける
 	command := exec.CommandContext(ctx, name, args...)
 	command.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
