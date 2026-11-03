@@ -120,9 +120,6 @@ var (
 	graphQLRE  = regexp.MustCompile(`(?i)mergePullRequest|enablePullRequestAutoMerge`)
 	httpHostRE = regexp.MustCompile(`(?:curl|wget)` + seg + `api\.github\.com`)
 	httpWrite  = regexp.MustCompile(`-X` + py.Space + `+(?:PUT|PATCH|POST)|/merge`)
-	// PR の head の取得（手元でマージする起点になる）。refspec の表記（+refs/pull/... / :pull/...）も見る。
-	fetchHeadRE = regexp.MustCompile(boundary + rtk + pathPrefix + `git` + py.Space + `+fetch` + seg +
-		`(?:[:+]|` + py.Space + `|refs/)pull/` + py.Digit + `+/head`)
 )
 
 // normalize は表記ゆれをそろえる。--method=PUT / --method PUT / -XPUT をすべて "-X PUT" に寄せ、改行を空白にする。
@@ -148,8 +145,6 @@ func evaluate(command string) string {
 		return idTargetGraphQL
 	case httpHostRE.MatchString(normalized) && httpWrite.MatchString(normalized):
 		return idTargetHTTP
-	case fetchHeadRE.MatchString(normalized):
-		return idTargetFetch
 	default:
 		return ""
 	}

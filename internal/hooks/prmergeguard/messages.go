@@ -14,7 +14,6 @@ const (
 	idTargetAPI     = "pr-merge-guard.target.api-merge"
 	idTargetGraphQL = "pr-merge-guard.target.graphql"
 	idTargetHTTP    = "pr-merge-guard.target.http"
-	idTargetFetch   = "pr-merge-guard.target.fetch-head"
 )
 
 var messages = i18n.Register(i18n.Catalog{
@@ -52,8 +51,6 @@ var messages = i18n.Register(i18n.Catalog{
 	idTargetGraphQL: {EN: "a merge mutation via GraphQL", JA: "GraphQL によるマージ mutation"},
 	// curl などの HTTP クライアントで GitHub API を更新する形。
 	idTargetHTTP: {EN: "a GitHub API update via an HTTP client", JA: "HTTP クライアント経由の GitHub API 更新"},
-	// PR の head を取ってきてローカルでマージする準備。
-	idTargetFetch: {EN: "git fetch origin pull/.../head", JA: "git fetch origin pull/.../head"},
 })
 
 func reason(language i18n.Language, target string) string {
