@@ -31,13 +31,14 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   prepare:
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -49,7 +50,7 @@ jobs:
 
       # バージョンの真実源はタグである。リポジトリにバージョンを書いた manifest を持たないため
       # version-bump-type は none とし、リリース PR はバージョンを刻む差分を持たない空コミットになる。
-      - uses: HappyOnigiri/ReleaseActions/actions/prepare-release@main
+      - uses: HappyOnigiri/ReleaseActions/actions/prepare-release@main  # zizmor: ignore[unpinned-uses] 自作の共通 Action の main に追従させるため、固定しない。
         id: prepare
         with:
           version: ${{ inputs.version }}
@@ -61,7 +62,7 @@ jobs:
           version-bump-type: none
           github-token: ${{ secrets.GH_TOKEN }}
 
-      - uses: HappyOnigiri/ReleaseActions/actions/merge-release@main
+      - uses: HappyOnigiri/ReleaseActions/actions/merge-release@main  # zizmor: ignore[unpinned-uses] 自作の共通 Action の main に追従させるため、固定しない。
         if: env.AUTOMATIC_RELEASE == 'true' && steps.prepare.outputs.pr-number != ''
         with:
           pr-number: ${{ steps.prepare.outputs.pr-number }}

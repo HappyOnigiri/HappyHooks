@@ -31,7 +31,8 @@ runs:
     # the per-job caches below restore in a fraction of the time.
     - name: Install the Go toolchain from go.mod
       shell: bash
-      run: |
+      # GITHUB_PATH と GITHUB_ENV には、このステップが展開した Go の場所と定数だけを書く（外部の入力を書かない）。
+      run: | # zizmor: ignore[github-env]
         version="$(awk '$1 == "go" { print $2 }' go.mod)"
         case "$(uname -m)" in
           x86_64) arch=amd64 ;;
@@ -66,7 +67,7 @@ runs:
     # The key ends with the commit SHA, so it never matches exactly and the newest cache saved from
     # main (or, for a new dependency set, the newest cache of this job) is restored instead.
     - id: restore
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.cache-key.outputs.path }}
         key: ${{ steps.cache-key.outputs.key }}

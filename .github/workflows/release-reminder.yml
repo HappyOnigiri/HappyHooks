@@ -5,11 +5,12 @@ on:
     types: [opened, synchronize]
     branches: [main]
 
-permissions:
-  pull-requests: write
+permissions: {}
 
 jobs:
   remind:
+    permissions:
+      pull-requests: write
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
