@@ -501,22 +501,36 @@ func TestWorkflowWatchCommand(t *testing.T) {
 }
 
 // fakeRunList は gh run list の代わりに body を実行する gh を PATH の先頭に置き、登録待ちのループを bash で走らせる。
+// ループが止まらないことは、時間ではなく再試行の sleep に入ったことで判定する。
+// make ci の並列の負荷では偽の gh の起動だけで数秒かかることがあり、時間の上限で判定すると正しく抜けたループまで落ちる。
+// 偽の sleep は印を残して親の bash を止める。時間の上限は、sleep に入らずに止まらない不具合に備える保険である。
 func fakeRunList(t *testing.T, body string) (int, string) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sleptMarker := filepath.Join(dir, "slept")
+	fakeSleep := "#!/bin/sh\n: > '" + sleptMarker + "'\nkill -TERM \"$PPID\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(fakeSleep), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	command := workflowWatchCommand(hooktest.Language, "gh workflow run deploy.yml --ref main", map[string]any{"stdout": "Created"})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	process := exec.CommandContext(ctx, "bash", "-c", command)
+	// kill した bash の子が stderr を持ったまま残っても、Run が子の終わりまで待たないようにする。
+	process.WaitDelay = 2 * time.Second
 	process.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var stderr strings.Builder
 	process.Stderr = &stderr
 	err := process.Run()
-	if ctx.Err() != nil {
-		t.Fatal("the wait loop did not stop")
+	if _, statErr := os.Stat(sleptMarker); statErr == nil {
+		t.Fatalf("the wait loop did not stop: it entered the retry sleep (stderr=%q)", stderr.String())
+	}
+	// 上限の直前に自分で終わった場合は落とさない。kill されたときだけ止まらなかったとみなす。
+	if ctx.Err() != nil && (process.ProcessState == nil || !process.ProcessState.Exited()) {
+		t.Fatalf("the wait loop did not stop within the timeout (stderr=%q)", stderr.String())
 	}
 	code := 0
 	var exitErr *exec.ExitError
