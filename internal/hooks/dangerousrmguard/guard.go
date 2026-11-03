@@ -174,9 +174,25 @@ func evaluate(command, cwd string) (finding, error) {
 		return finding{target: idUnresolvable, token: shown(token, resolved), why: why, how: how}, nil
 	}
 	// --- REPORT 系（対象の書き換えが迂回路にしかならない） ---
-	kind, token, resolved, err := findProtectedPath(command, cwd)
-	if err != nil {
-		return finding{}, err
+	// 移植元との違い: 組み込みは重要ディレクトリ・作業ディレクトリの判定をパーサーの読んだコマンドで行い、
+	// クォートの中の rm（echo 'cd junk && rm -rf .'）では ask を出さない（v2.1.317 で確認、docs/verify-claude-code-asks.md）。
+	// クォートを見ずに区切る移植の判定はそれを止めていたので、シングルクォート・`$'…'`・クォートした heredoc の本文の
+	// 外に rm の綴りが 1 つも無いときは見ない。外の綴りは語の位置を問わず数え、`"rm"`・`r\m`・`r''m` も rm として数える
+	// （読み違えても従来どおり見る側に倒れる）。
+	// heredoc を含むときは従来どおり見る。シェルへ流し込む本文（bash <<'EOF'）の rm は実行されるので、
+	// 組み込みが ask を出さなくても止める側に残す（同じく v2.1.317 で確認）。
+	reading := struct {
+		cmdsubs, rmSpellings int
+		ok                   bool
+	}{}
+	reading.cmdsubs, reading.rmSpellings, reading.ok = shellReading(command)
+	kind, token, resolved := "", "", ""
+	var err error
+	if !reading.ok || reading.rmSpellings > 0 || strings.Contains(command, "<<") {
+		kind, token, resolved, err = findProtectedPath(command, cwd)
+		if err != nil {
+			return finding{}, err
+		}
 	}
 	switch token := shown(token, resolved); kind {
 	case "critical":
@@ -196,7 +212,13 @@ func evaluate(command, cwd string) (finding, error) {
 	if name, arg := findInSubstitution(command); name != "" {
 		return finding{target: idCmdsub, command: name, token: arg, why: idWhyCmdsub, how: idHowCmdsub}, nil
 	}
-	if len(substitutions(command)) > maxSubstitutions {
+	// 移植元との違い: 組み込みはクォートした heredoc の本文の `$(…)` やバッククォートを数えない（v2.1.317 で確認）。
+	// 本文に Markdown のコードスパンを書いたプランの書き出しまで止めていたので、読み切れるときは展開として読む位置だけを数える。
+	count := len(substitutions(command))
+	if reading.ok {
+		count = reading.cmdsubs
+	}
+	if count > maxSubstitutions {
 		return finding{target: idTooMany, why: idWhyTooMany, how: idHowTooMany}, nil
 	}
 	return finding{}, nil
@@ -1720,31 +1742,71 @@ func findUnparsed(command string) finding {
 	return scanExpansions(command, scanCode)
 }
 
+// spellsRemoval は command[i] の r と m の間（m なら前の r との間）に、バックスラッシュとクォートだけが挟まるかを返す
+// （rm・rmdir・`r\m`・`r”m`・`'r'm`）。走査がクォートの中を読み飛ばしても、どちらかの文字は読む位置に残る。
+func spellsRemoval(command string, i int) bool {
+	const glue = "\\\"'"
+	switch command[i] {
+	case 'r':
+		j := i + 1
+		for j < len(command) && strings.IndexByte(glue, command[j]) >= 0 {
+			j++
+		}
+		return j < len(command) && command[j] == 'm'
+	case 'm':
+		j := i - 1
+		for j >= 0 && strings.IndexByte(glue, command[j]) >= 0 {
+			j--
+		}
+		return j < i-1 && j >= 0 && command[j] == 'r'
+	}
+	return false
+}
+
+// shellReading は、クォート・heredoc・コメントを解釈して command を読み、展開として読む位置のコマンド置換の数と、
+// 読み飛ばさない位置にある rm の綴り（spellsRemoval）の数を返す。シングルクォート・`$'…'`・コメント・クォートした
+// heredoc の本文の中は数えない。クォートや heredoc が閉じず読み切れなければ ok は false である。
+func shellReading(command string) (cmdsubs, rmSpellings int, ok bool) {
+	s, ok := runScanner(command, scanCode)
+	if !ok {
+		return 0, 0, false
+	}
+	return s.cmdsubs, s.rmSpellings, true
+}
+
 // expansionScanner は scanExpansions の走査の状態である。
 type expansionScanner struct {
-	command   string
-	found     finding // 最初に見つけた読み切れない形
-	stack     []scanFrame
-	pending   []heredocMarker // 行末で本文を読む heredoc
-	wordStart bool            // 直前が語の区切りか（`#` をコメントとして読むか）
-	cmdStart  bool            // 次の語が文の先頭か（`(` をサブシェルとして読むか）
+	command     string
+	found       finding // 最初に見つけた読み切れない形
+	stack       []scanFrame
+	pending     []heredocMarker // 行末で本文を読む heredoc
+	wordStart   bool            // 直前が語の区切りか（`#` をコメントとして読むか）
+	cmdStart    bool            // 次の語が文の先頭か（`(` をサブシェルとして読むか）
+	cmdsubs     int             // 展開として読む位置のコマンド置換（`$(`・バッククォート）の数
+	rmSpellings int             // 読み飛ばさない位置にある rm の綴りの数（spellsRemoval）
 }
 
 // scanExpansions は base の文脈から command を走査し、最初に読み切れない形を返す。
 // 見つけても末尾まで走査し、閉じない heredoc やクォートがあれば判定しない（空を返す）。
 func scanExpansions(command string, base int) finding {
-	s := &expansionScanner{command: command, stack: []scanFrame{{mode: base}}, wordStart: true, cmdStart: true}
+	s, ok := runScanner(command, base)
+	if !ok {
+		return finding{}
+	}
+	return s.found
+}
+
+// runScanner は base の文脈から command を末尾まで走査する。閉じない heredoc やクォートがあれば ok は false である。
+func runScanner(command string, base int) (s *expansionScanner, ok bool) {
+	s = &expansionScanner{command: command, stack: []scanFrame{{mode: base}}, wordStart: true, cmdStart: true}
 	for i := 0; i < len(command); i++ {
-		next, ok := s.step(i)
-		if !ok {
-			return finding{}
+		next, stepped := s.step(i)
+		if !stepped {
+			return s, false
 		}
 		i = next
 	}
-	if len(s.pending) > 0 {
-		return finding{} // 本文の無い heredoc も閉じていない
-	}
-	return s.found
+	return s, len(s.pending) == 0 // 本文の無い heredoc も閉じていない
 }
 
 func (s *expansionScanner) push(mode int) { s.pushFrame(scanFrame{mode: mode}) }
@@ -1770,6 +1832,9 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 	command := s.command
 	top := s.stack[len(s.stack)-1]
 	c := command[i]
+	if spellsRemoval(command, i) {
+		s.rmSpellings++
+	}
 	switch {
 	case c == '\\':
 		s.wordStart, s.cmdStart = false, false
@@ -1792,6 +1857,9 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 		s.wordStart, s.cmdStart = true, false
 		return i + 2, true
 	case c == '$' && i+1 < len(command) && command[i+1] == '(':
+		if !top.arith {
+			s.cmdsubs++
+		}
 		s.pushFrame(scanFrame{mode: scanCode, cmdsub: !top.arith, start: i})
 		s.wordStart, s.cmdStart = true, true
 		return i + 1, true
@@ -1802,6 +1870,7 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 		if top.backtick {
 			s.pop()
 		} else {
+			s.cmdsubs++
 			s.stack = append(s.stack, scanFrame{mode: scanCode, backtick: true})
 		}
 		s.wordStart, s.cmdStart = true, !top.backtick
@@ -1954,8 +2023,14 @@ func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
 			// 区切りの行で閉じない heredoc は、組み込みのパーサーが解析を打ち切ることがある（その場合は ask にならない）。
 			return i, false
 		}
-		if !marker.quoted && s.found.target == "" {
-			s.found = scanExpansions(body, scanHeredoc)
+		if !marker.quoted {
+			// クォートしない本文の置換と rm の綴りは展開されるので数える。
+			sub, subOK := runScanner(body, scanHeredoc)
+			if s.found.target == "" && subOK {
+				s.found = sub.found
+			}
+			s.cmdsubs += sub.cmdsubs
+			s.rmSpellings += sub.rmSpellings
 		}
 	}
 	s.pending = nil

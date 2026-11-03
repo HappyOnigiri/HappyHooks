@@ -32,5 +32,15 @@ parser cannot read a command, even without `rm` in it. The hook denies the two f
 Inside single quotes, `$'...'`, comments, and quoted heredocs, these are not expansions and are left alone.
 Other forms that Claude Code's parser cannot read are not covered.
 
+Quoted text follows v2.1.317 ([how it was checked](../verify-claude-code-asks.md)):
+
+- The checks for critical directories and the working directory are skipped when `rm` appears only inside single
+  quotes, `$'...'`, or comments, such as `echo 'cd junk && rm -rf .'` or a commit message that mentions `rm -rf /`.
+  A command that contains a heredoc is still checked, because a heredoc fed to a shell (`bash <<'EOF'`) runs its body.
+- The limit on the number of command substitutions counts only those that expand. `$(...)` and backticks inside single
+  quotes or a quoted heredoc, such as Markdown code spans in a plan written with `cat > plan.md <<'EOF'`, do not count.
+
+When the quotes or heredocs do not close, the hook falls back to the earlier checks.
+
 Other checks may differ from newer versions. [`permission-request-guard`](permission-request-guard.md) denies
 what this hook misses and logs it.
