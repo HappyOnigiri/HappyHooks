@@ -56,7 +56,50 @@ func TestBlocksPRAndIssueBodies(t *testing.T) {
 		`cd sub && gh pr create --body "`+term+`"`,
 		`gh pr create --body "`+strings.ToUpper(term)+`"`,
 		"gh　pr create --body "+term,
-		"gh api\n"+term,
+		"gh\tapi repos/o/r/issues -f body="+term,
+	))
+}
+
+// 移植元との違い: 読み取りの gh api は、語を含んでも本文を書き込まないので検査しない。
+func TestAllowsReadOnlyAPI(t *testing.T) {
+	repo := newRepo(t, term)
+	hooktest.CheckTable(t, Definition(), "", repo, hooktest.Commands(
+		"gh api repos/"+term+"/server --jq .visibility",
+		"gh api user/memberships/orgs/"+term+" --jq '.state,.role' 2>&1 | head -3",
+		`gh api "repos/`+term+`/server/pulls/1/files" --paginate --jq ".[].filename" | grep -E "\.rb$"`,
+		"gh api -X GET search/issues -f q=repo:"+term+"/server",
+		"gh api --method=get search/issues -f q="+term,
+		"gh api -XGET search/issues -f q="+term,
+		`gh api graphql -f query='query { repository(owner:"`+term+`", name:"server") { id } }'`,
+		`gh api graphql -f query='query($sha:GitObjectID!){repository(owner:"`+term+`",name:"server"){object(oid:$sha){id}}}' -F sha=abc`,
+		"cd ~/dev/"+term+" && gh api repos/"+term+"/server; git status | head -2",
+		"/opt/homebrew/bin/gh api repos/"+term+"/server",
+		"gh api repos/o/r && gh pr view 1 && echo "+term,
+	))
+}
+
+// 読み取りと確かめられない gh api は、従来どおり検査する。
+func TestDeniesAPIThatMayWrite(t *testing.T) {
+	repo := newRepo(t, term)
+	hooktest.CheckTable(t, Definition(), hooktest.Deny, repo, hooktest.Commands(
+		"gh api repos/o/r/issues -f title="+term,
+		"gh api repos/o/r/issues -F title="+term,
+		"gh api repos/o/r/issues --raw-field=title="+term,
+		"gh api -X POST repos/"+term+"/r/issues",
+		"gh api --method PATCH repos/"+term+"/r/issues/1",
+		"gh api repos/"+term+"/r/issues --input body.json",
+		`gh api graphql -f query='mutation { addComment(input:{body:"`+term+`"}) { clientMutationId } }'`,
+		"gh api graphql -F query=@q.graphql -f owner="+term,
+		// 読み取りと書き込みが混ざれば検査する。
+		"gh api repos/"+term+"/r; gh api repos/o/r/issues -f title=x",
+		"gh api repos/"+term+"/r && gh pr create --body x",
+		// gh の呼び出しが字句の上で見えない形は確かめられない。
+		`echo "$(gh api repos/`+term+`/r)"`,
+		"v=`date`; gh api repos/"+term+"/r",
+		"xargs gh api repos/"+term+"/r",
+		"GH_HOST=example.com gh api repos/"+term+"/r",
+		"gh api repos/"+term+"/r --unknown-flag",
+		`gh api 'repos/`+term+`/r`,
 	))
 }
 

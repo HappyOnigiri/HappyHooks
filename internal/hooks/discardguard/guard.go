@@ -31,9 +31,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -42,8 +44,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/HappyOnigiri/hhx/internal/hookcache"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	py "github.com/HappyOnigiri/hhx/internal/pycompat"
+	"github.com/HappyOnigiri/hhx/internal/version"
 )
 
 // Name は hook の名前である。
@@ -92,14 +96,15 @@ func gate(input []byte) bool {
 }
 
 func run(c *hookrt.Context) error {
-	runner := gitRunner{deadline: time.Now().Add(timeBudget)}
-	var command, cwd string
+	runner := gitRunner{deadline: time.Now().Add(timeBudget), failure: &gitFailure{}}
+	var command, cwd, sessionID string
 	var scratch scratchpad
 	if c.FromArgs {
 		command = string(c.Input)
 	} else {
-		command, cwd, scratch = payloadFrom(c.Input)
+		command, cwd, sessionID, scratch = payloadFrom(c.Input)
 	}
+	original := command
 	command, bodies := stripFileHeredocs(command)
 	if command == "" || !gitCallRE.MatchString(command) {
 		return nil
@@ -130,10 +135,28 @@ func run(c *hookrt.Context) error {
 	// 候補が同じ作業ツリーの別のディレクトリなら、保存は 1 回にする（toplevel で重複を除く）。
 	// toplevel は --show-toplevel の値のまま比べる。正規化を変えるとメッセージの "@ <toplevel>" も変わる。
 	seen := map[string]bool{}
+	deny := func(target string) {
+		_ = recordFailure(failureEntry{
+			Time:       now().UTC().Format(time.RFC3339),
+			HHXVersion: version.String(),
+			SessionID:  sessionID,
+			CWD:        cwd,
+			Command:    clipRunes(original, maxRecordedCommand),
+			Target:     target,
+			gitFailure: *runner.failure,
+		})
+		c.Deny(denyFailed(c.Language(), label))
+	}
 	for _, target := range targets {
 		top, ok := runner.git(target, nil, "rev-parse", "--show-toplevel")
 		if !ok || top == "" {
-			c.Deny(denyFailed(c.Language(), label))
+			// 移植元との違い: 移植元は git 管理下でない対象も保存できないとして deny していた。
+			// 存在するディレクトリを git 自身が「リポジトリではない」と答えたなら、破棄の git も同じ理由で失敗し、
+			// 失う変更が無いので通す（grep のパターンに破棄の git の文字列を書いただけのコマンドなどが止まっていた）。
+			if !ok && runner.failure.notARepository() && isDirectory(target) {
+				continue
+			}
+			deny(target)
 			return nil
 		}
 		if seen[top] {
@@ -141,7 +164,7 @@ func run(c *hookrt.Context) error {
 		}
 		seen[top] = true
 		if snapshot(runner, top, strings.Join(rules, " / ")) == failed {
-			c.Deny(denyFailed(c.Language(), label))
+			deny(top)
 			return nil
 		}
 	}
@@ -151,18 +174,23 @@ func run(c *hookrt.Context) error {
 
 // payloadFrom は payload から command と cwd と、session_id のセッションの scratchpad を取り出す。型の違う値は空として扱う。
 // 文字列でない command は、移植元では判定の途中で例外になり無出力で終わっていた。
-func payloadFrom(raw []byte) (command, cwd string, scratch scratchpad) {
+func payloadFrom(raw []byte) (command, cwd, sessionID string, scratch scratchpad) {
 	var payload map[string]any
 	if json.Unmarshal(raw, &payload) != nil {
-		return "", "", scratchpad{}
+		return "", "", "", scratchpad{}
 	}
 	if toolInput, ok := payload["tool_input"].(map[string]any); ok {
 		command, _ = toolInput["command"].(string)
 	}
 	cwd, _ = payload["cwd"].(string)
-	sessionID, _ := payload["session_id"].(string)
+	sessionID, _ = payload["session_id"].(string)
 	transcriptPath, _ := payload["transcript_path"].(string)
-	return command, cwd, newScratchpad(sessionID, transcriptPath)
+	return command, cwd, sessionID, newScratchpad(sessionID, transcriptPath)
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // 以下の検出用のパターンは「多めに拾って、対象の特定で絞る」方針である。検出が漏れると snapshot なしで破棄が走るため、迷ったら広く拾う。
@@ -1432,7 +1460,31 @@ func snapshot(runner gitRunner, top, rules string) snapshotResult {
 // gitRunner は hook 全体の持ち時間の中で git を起動する。
 type gitRunner struct {
 	deadline time.Time
+	// failure は最後に失敗した git の様子である。deny の原因を記録に残すために持つ（nil なら残さない）。
+	failure *gitFailure
 }
+
+// gitFailure は失敗した git の起動の様子である。snapshot を作れずに deny した原因を後から調べるために記録する。
+type gitFailure struct {
+	Args     []string `json:"git_args,omitempty"`
+	ExitCode int      `json:"exit_code"`
+	// TimedOut は git 1 回の上限か hook 全体の持ち時間を使い切ったことを示す。
+	TimedOut  bool   `json:"timed_out"`
+	Stderr    string `json:"stderr,omitempty"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+}
+
+// notARepository は、git がディレクトリをリポジトリでないと答えて失敗したかを返す。
+// git の表示言語に左右されないよう、git の起動では LC_ALL=C にしている。
+func (f *gitFailure) notARepository() bool {
+	return f != nil && !f.TimedOut && f.ExitCode == 128 && strings.Contains(f.Stderr, "not a git repository")
+}
+
+// 記録の stderr とコマンドの長さの上限（文字数）。
+const (
+	maxRecordedStderr  = 1000
+	maxRecordedCommand = 4000
+)
 
 // git は `git -C <directory> <args...>` を実行し、stdout の両端の空白を除いて返す。失敗・タイムアウトなら ok は偽になる。
 func (r gitRunner) git(directory string, env []string, args ...string) (string, bool) {
@@ -1445,14 +1497,14 @@ func (r gitRunner) git(directory string, env []string, args ...string) (string, 
 func (r gitRunner) run(directory string, env []string, stdin string, args ...string) (string, bool) {
 	remaining := time.Until(r.deadline)
 	if remaining <= 0 {
+		r.fail(args, -1, true, "", 0)
 		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), min(gitTimeout, remaining))
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", directory}, args...)...)
-	if env != nil {
-		command.Env = append(os.Environ(), env...)
-	}
+	// 失敗の判別（not a git repository）を stderr の文面で行うので、git のメッセージを英語に固定する。
+	command.Env = append(append(os.Environ(), "LC_ALL=C"), env...)
 	// タイムアウトでは SIGKILL ではなく SIGTERM で止める。git は SIGTERM を捕捉して一時 index の lock を消すが、
 	// SIGKILL だと lock が残り、以後その作業ツリーの snapshot が失敗し続ける（破棄系のコマンドがすべて deny になる）。
 	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
@@ -1461,10 +1513,95 @@ func (r gitRunner) run(directory string, env []string, stdin string, args ...str
 	if stdin != "" {
 		command.Stdin = strings.NewReader(stdin)
 	}
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
-	if command.Run() != nil {
+	command.Stderr = &stderr
+	start := time.Now()
+	if err := command.Run(); err != nil {
+		exitCode := -1
+		if exitError := (*exec.ExitError)(nil); errors.As(err, &exitError) {
+			exitCode = exitError.ExitCode()
+		}
+		r.fail(args, exitCode, ctx.Err() != nil, stderr.String(), time.Since(start).Milliseconds())
 		return "", false
 	}
 	return stdout.String(), true
+}
+
+// fail は失敗した git の様子を failure に残す。
+func (r gitRunner) fail(args []string, exitCode int, timedOut bool, stderr string, elapsedMS int64) {
+	if r.failure == nil {
+		return
+	}
+	*r.failure = gitFailure{
+		Args:      slices.Clone(args),
+		ExitCode:  exitCode,
+		TimedOut:  timedOut,
+		Stderr:    clipRunes(py.Strip(strings.ToValidUTF8(stderr, "�")), maxRecordedStderr),
+		ElapsedMS: elapsedMS,
+	}
+}
+
+// clipRunes は text を limit 文字（コードポイント）までに切る。
+func clipRunes(text string, limit int) string {
+	if utf8.RuneCountInString(text) <= limit {
+		return text
+	}
+	return string([]rune(text)[:limit]) + " …"
+}
+
+// --- snapshot を作れなかったときの記録 -----------------------------------------------
+
+// failureLogName は snapshot を作れずに deny したときの記録のファイル名である（hookcache の下）。
+// 原因（git 管理下でない・タイムアウト・lock の競合など）は理由文からは分からないので、後から調べる材料として残す。
+const failureLogName = "snapshot-failures.jsonl"
+
+// maxFailureLogSize を超えた記録は 1 世代だけ退避してから書き足す。調査の材料なので古い分は失ってよい。
+const maxFailureLogSize = 1 << 20
+
+// failureEntry は記録の 1 行である。
+type failureEntry struct {
+	Time       string `json:"time"`
+	HHXVersion string `json:"hhx_version"`
+	SessionID  string `json:"session_id,omitempty"`
+	CWD        string `json:"cwd"`
+	Command    string `json:"command"`
+	// Target は保存しようとした作業ツリー（rev-parse に失敗したときは対象のディレクトリ）である。
+	Target string `json:"target"`
+	gitFailure
+}
+
+// now は記録の時刻である。テストで固定する。
+var now = time.Now
+
+// recordFailure は value を記録の末尾に 1 行で書き足す。複数のプロセスが同時に書いても行が混ざらないよう、1 回の write で書く。
+func recordFailure(value failureEntry) error {
+	dir, err := hookcache.Dir(Name)
+	if err != nil {
+		return err
+	}
+	if err := hookcache.MkdirAll(dir); err != nil {
+		return err
+	}
+	// コマンドの `<>&` をそのまま読めるよう、HTML 向けのエスケープを切る。Encode は末尾に改行を付ける。
+	var line bytes.Buffer
+	encoder := json.NewEncoder(&line)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, failureLogName)
+	if info, err := os.Stat(path); err == nil && info.Size() > maxFailureLogSize {
+		_ = os.Rename(path, path+".1")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(line.Bytes())
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

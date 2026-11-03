@@ -64,7 +64,8 @@ Action: Rewrite it as follows, and it will pass after a snapshot is taken.
 		EN: `❌ Blocked: {{.Label}}
 
 Reason: This operation discards uncommitted changes, but taking the restore snapshot
-        failed (not under git, a git command failed, it timed out, and so on).
+        failed (a git command failed, it timed out, and so on). The failing git command
+        and its error are logged in discard-guard/snapshot-failures.jsonl under the hhx cache.
 
 Action: Rewriting the command will not make it pass. Only if you suspect a temporary
         failure such as an index.lock conflict, run the same command once more; otherwise
@@ -74,7 +75,8 @@ Action: Rewriting the command will not make it pass. Only if you suspect a tempo
 		JA: `❌ ブロック: {{.Label}}
 
 理由: 未コミットの変更を破棄する操作ですが、復元用スナップショットの作成に失敗しました
-      (git 管理下でない、git コマンドが失敗した、タイムアウトしたなど)。
+      (git コマンドが失敗した、タイムアウトしたなど)。失敗した git コマンドとエラーは
+      hhx のキャッシュの discard-guard/snapshot-failures.jsonl に記録されています。
 
 対応: 書き直しでは通りません。index.lock の競合のような一時的な失敗が疑われる場合だけ
       同じコマンドを 1 度再実行し、それ以外は迂回せず、操作・対象・目的をユーザーに伝えて

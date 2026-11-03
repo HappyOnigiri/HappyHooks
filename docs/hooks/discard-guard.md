@@ -7,7 +7,12 @@ English | [日本語](discard-guard.ja.md) · [Hooks](../../README.md#hooks)
 Before a Git command discards uncommitted changes, this hook saves tracked and untracked files in the reflog of
 `refs/hhx/discard-snapshot`. It covers commands such as `git reset --hard`, forced checkout or switch, `git restore`,
 and `git clean -f`. A successful snapshot lets the command proceed; an unresolved target or failed snapshot blocks it.
-The working tree and index are not changed by the snapshot.
+A target directory outside any Git repository has nothing to discard, so the command proceeds (for example, a `grep`
+pattern that mentions such a command). The working tree and index are not changed by the snapshot.
+
+When a failed snapshot blocks a command, the hook appends the failing Git command, exit code, timeout flag, and stderr
+to `~/.cache/hhx/discard-guard/snapshot-failures.jsonl` (under `$XDG_CACHE_HOME` when set). Past 1 MiB, the log moves
+to `snapshot-failures.jsonl.1`.
 
 ## How the target is found
 

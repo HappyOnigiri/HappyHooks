@@ -1024,3 +1024,62 @@ func TestUnparsedParensGate(t *testing.T) {
 		}
 	}
 }
+
+// 組み込みはシングルクォートの中の rm では ask を出さない（v2.1.317 で確認、docs/verify-claude-code-asks.md）。
+// 読み飛ばす位置の外に rm の綴りがあるときや、heredoc を含むときは従来どおり止める。
+func TestQuotedRemovalText(t *testing.T) {
+	root := realTempDir(t)
+	cwd := filepath.Join(root, "work")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkIn(t, cwd, "", hooktest.Commands(
+		"echo 'Start by running: cd junk && rm -rf .'",
+		"git commit -m 'drop the rm -rf / example'",
+		"printf '%s\\n' $'rm -rf .'",
+		"for c in 'cd junk && rm -rf .'; do echo \"$c\"; done",
+	))
+	checkIn(t, cwd, hooktest.Deny, denyAll(labelCWD,
+		`echo "cd junk && rm -rf ."`,
+		// heredoc を含むときは本文がクォートされていても見る。シェルへ流し込む本文（bash <<'EOF'）は実行されるので、
+		// 組み込みは ask を出さないが止める側に残す。
+		"bash <<'EOF'\nrm -rf .\nEOF", "cat > plan.md <<'EOF'\nrm -rf .\nEOF",
+		// クォートが閉じず読み切れないときも従来どおり見る。
+		"rm -rf . 'unclosed",
+	))
+	checkIn(t, cwd, hooktest.Deny, denyAll(labelCritical, "echo 'note' && rm -rf /"))
+	// 空になり得る変数の判定はクォートの中も見る（組み込みも ask を出す）。
+	checkIn(t, cwd, hooktest.Deny, denyAll(labelEmptyVar, "for c in 'S=/tmp/x; rm -rf $S/$v'; do echo \"$c\"; done"))
+}
+
+// 組み込みはクォートした heredoc の本文の `$(…)` やバッククォートを数えない（v2.1.317 で確認）。
+func TestQuotedHeredocSubstitutionsAreNotCounted(t *testing.T) {
+	many := strings.Repeat("$(true) ", 70)
+	ticks := strings.Repeat("`x` ", 70)
+	check(t, "", hooktest.Commands(
+		"cat > plan.md <<'EOF'\n"+many+"\nEOF\nrm -f plan.md",
+		"cat > plan.md <<'EOF'\n"+ticks+"\nEOF\nrm -f plan.md",
+		"echo '"+many+"' > plan.txt; rm -f plan.txt",
+	))
+	check(t, hooktest.Deny, denyAll(labelTooMany,
+		"cat > plan.md <<EOF\n"+many+"\nEOF\nrm -f plan.md",
+		"echo \""+many+"\" > plan.txt; rm -f plan.txt",
+		// 読み切れないときは従来どおりすべて数える。
+		"rm -f plan.txt "+many+" 'unclosed",
+	))
+}
+
+func TestSpellsRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    int
+	}{
+		{"rm -rf x", 1}, {"rmdir x", 1}, {`r\m x`, 1}, {`r''m x`, 2}, {"echo 'rm -rf x'", 0},
+		{"format", 1}, {"echo hi", 0},
+	} {
+		_, got, ok := shellReading(tc.command)
+		if !ok || got != tc.want {
+			t.Errorf("shellReading(%q) = %d, %v; want %d", tc.command, got, ok, tc.want)
+		}
+	}
+}
