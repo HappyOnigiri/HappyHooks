@@ -1903,6 +1903,8 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 }
 
 // stepUnquoted はクォートの外（scanCode・scanSubshell・scanBrace）の 1 文字を読む。
+//
+//nolint:cyclop // bash の字句を 1 文字ずつ読む状態機械で、分岐は文字の種類ごとの規則に対応する。分けると状態の受け渡しが増え、判定が変わり得る。
 func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool) {
 	command := s.command
 	c := command[i]
@@ -2045,6 +2047,8 @@ func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
 // expansionHeadParses は組み込みの `Pe` のうち、`${` の直後（i）から名前と添字までを読み、続く文字で `}` に届くかを返す。
 // 演算子（`:`・`#`・`%`・`/`・`^`・`,`・`-`・`=`・`?`・`+`）が続けば、その後ろは読み切れるものとみなす（通す側）。
 // 添字の `]` が見つからないときも通す側に倒す。
+//
+//nolint:cyclop // bash の字句を 1 文字ずつ読む状態機械で、分岐は文字の種類ごとの規則に対応する。分けると状態の受け渡しが増え、判定が変わり得る。
 func expansionHeadParses(command string, i int) bool {
 	at := func(offset int) byte {
 		if i+offset < len(command) {

@@ -235,6 +235,7 @@ var handWriters = map[string]bool{
 	"unexpand": true, "}": true, "done": true, "fi": true, "esac": true,
 }
 
+//nolint:cyclop // bash の字句を 1 文字ずつ読む状態機械で、分岐は文字の種類ごとの規則に対応する。分けると状態の受け渡しが増え、判定が変わり得る。
 func (s *bashScan) command(c *command, depth int) {
 	args := stripPrefixes(c.words)
 	name := ""

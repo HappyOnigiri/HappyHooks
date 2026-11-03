@@ -801,10 +801,10 @@ func TestShorten(t *testing.T) {
 	home := hooktest.TempDir(t)
 	t.Setenv("HOME", home)
 	for path, want := range map[string]string{
-		filepath.Join(home, "dev/cs"): "~/dev/cs",
-		home:                          "~",
-		home + "-other/x":             home + "-other/x",
-		"/opt/homebrew":               "/opt/homebrew",
+		filepath.Join(home, "dev", "cs"): "~/dev/cs",
+		home:                             "~",
+		home + "-other/x":                home + "-other/x",
+		"/opt/homebrew":                  "/opt/homebrew",
 	} {
 		if got := shorten(path); got != want {
 			t.Errorf("shorten(%q)=%q, want %q", path, got, want)
@@ -869,7 +869,7 @@ func TestOriginMatches(t *testing.T) {
 		t.Error("a plain directory must not match")
 	}
 	repo := hooktest.GitRepo(t, filepath.Join(root, "sub"), "git@github.com:cli/cli.git", false)
-	deep := filepath.Join(repo, "a/b")
+	deep := filepath.Join(repo, "a", "b")
 	_ = os.MkdirAll(deep, 0o755)
 	if !originMatches(deep, "cli/cli") {
 		t.Error("a subdirectory must match")

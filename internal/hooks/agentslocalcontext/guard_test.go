@@ -28,7 +28,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{tmp: tmp, repo: filepath.Join(tmp, "repo")}
 	hooktest.GitRepo(t, f.repo, "", false)
 	hooktest.WriteFile(t, filepath.Join(f.repo, ruleName), "root-local\n")
-	f.nested = filepath.Join(f.repo, "src/service")
+	f.nested = filepath.Join(f.repo, "src", "service")
 	hooktest.WriteFile(t, filepath.Join(f.repo, "src", ruleName), "src-local\n")
 	f.target = filepath.Join(f.nested, "target.py")
 	hooktest.WriteFile(t, f.target, "print('ok')\n")
@@ -477,7 +477,7 @@ func TestParentAndPartCount(t *testing.T) {
 func TestRulePathsForTarget(t *testing.T) {
 	f := newFixture(t)
 	roots := &gitRoots{cache: map[string]gitRootResult{}}
-	paths, err := rulePathsForTarget(filepath.Join(f.nested, "missing/deeper/file.go"), roots)
+	paths, err := rulePathsForTarget(filepath.Join(f.nested, "missing", "deeper", "file.go"), roots)
 	want := []string{filepath.Join(f.repo, ruleName), filepath.Join(f.repo, "src", ruleName), filepath.Join(f.nested, ruleName)}
 	if err != nil || strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths=%q err=%v", paths, err)

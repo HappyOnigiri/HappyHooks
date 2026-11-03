@@ -15,6 +15,7 @@ func withCatalogs(t *testing.T, tables []Catalog, f func()) {
 }
 
 func TestParseAndNormalize(t *testing.T) {
+	//nolint:gocritic // mapKey: 前後の空白を除いて解釈することを確かめる入力として " EN " を置いている。
 	for value, want := range map[string]Language{"": English, "en": English, " EN ": English, "ja": Japanese, "JA": Japanese} {
 		got, err := Parse(value)
 		if err != nil || got != want {
