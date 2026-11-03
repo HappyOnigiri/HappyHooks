@@ -6,6 +6,7 @@
 //     書式は docs/forbidden-terms.md にある。
 //   - 対象は本文をリモートへ送るコマンド（gh pr / gh issue の create・edit・comment と gh api）である。
 //     git commit と git push は git の commit-msg / pre-push hook が受け持つので対象外にする。
+//     対象がすべて読み取りの gh api なら検査しない（onlyReadOnlyAPI）。
 //   - コマンド文字列に加えて、--body-file / -F で渡すファイルの中身も読む。
 //   - 変数展開・別シェル経由といった明示的な回避は対象外（README の既知の限界）。
 //
@@ -61,7 +62,7 @@ var (
 
 func run(c *hookrt.Context) error {
 	command, cwd, ok := commandAndCWD(c)
-	if !ok || command == "" || !targetRE.MatchString(command) {
+	if !ok || command == "" || !targetRE.MatchString(command) || onlyReadOnlyAPI(command) {
 		return nil
 	}
 	gitDir := commonDir(cwd)
@@ -98,6 +99,155 @@ func run(c *hookrt.Context) error {
 		c.Deny(reason(c.Language(), findings, termsPath))
 	}
 	return nil
+}
+
+// 移植元との違い: 移植元は gh api をメソッドを問わず対象にしていた。読み取りの gh api（別リポジトリの情報を引く
+// graphql の query など）は本文を公開先へ書き込まないのに、語がリポジトリ名や org 名だと止まっていたので、
+// コマンドの中の対象がすべて読み取りの gh api と確かめられたときだけ検査しない。
+// 確かめられないとき（$(...)・バッククォート・閉じない引用・gh を別のコマンド越しに起動する形など）は従来どおり検査する。
+
+// apiSeparators は gh の呼び出しを区切る字句である。
+const apiSeparators = ";&|()\n"
+
+// apiValueFlags は値を 1 つ取る gh api のフラグである（gh 2.x の gh api --help）。
+var apiValueFlags = map[string]bool{
+	"-X": true, "--method": true, "-F": true, "--field": true, "-f": true, "--raw-field": true,
+	"--input": true, "-H": true, "--header": true, "-q": true, "--jq": true, "-t": true, "--template": true,
+	"--hostname": true, "--cache": true, "-p": true, "--preview": true,
+}
+
+// apiBoolFlags は値を取らない gh api のフラグである。
+var apiBoolFlags = map[string]bool{
+	"--paginate": true, "--slurp": true, "-i": true, "--include": true, "--silent": true, "--verbose": true,
+	"--allow-escape-sequences": true,
+}
+
+// onlyReadOnlyAPI は、command の中の検査の対象（targetRE に一致する箇所）がすべて読み取りの gh api かを返す。
+// 字句に区切って見つけた gh の呼び出しの数が targetRE の一致の数と違えば、見えない呼び出しがあるので偽を返す。
+func onlyReadOnlyAPI(command string) bool {
+	if strings.Contains(command, "$(") || strings.Contains(command, "`") {
+		return false
+	}
+	tokens, err := py.ShlexSplit(command, " \t\r", apiSeparators)
+	if err != nil {
+		return false
+	}
+	found := 0
+	start := true
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		if strings.Trim(token, apiSeparators) == "" {
+			start = true
+			continue
+		}
+		if !start {
+			continue
+		}
+		start = false
+		if token != "gh" && !strings.HasSuffix(token, "/gh") {
+			continue
+		}
+		end := index + 1
+		for end < len(tokens) && strings.Trim(tokens[end], apiSeparators) != "" {
+			end++
+		}
+		args := tokens[index+1 : end]
+		if len(args) == 0 {
+			continue
+		}
+		switch args[0] {
+		case "api":
+			found++
+			if !readOnlyAPI(args[1:]) {
+				return false
+			}
+		case "pr", "issue":
+			// 作成・編集・コメントでなければ対象ではない（targetRE と同じ条件）。
+			if len(args) > 1 && (args[1] == "create" || args[1] == "edit" || args[1] == "comment") {
+				return false
+			}
+		}
+		index = end - 1
+	}
+	return found > 0 && found == len(targetRE.FindAllStringIndex(command, -1))
+}
+
+// readOnlyAPI は gh api の引数（api より後）が読み取りの要求かを返す。
+//   - -X / --method があれば、GET のときだけ読み取りとする（フィールドはクエリ文字列になる）。
+//   - 無ければ、--input もフィールド（-f / -F）も無いときは GET なので読み取りとする。
+//   - エンドポイントが graphql なら、フィールドの値に mutation を含まず、ファイルから読む値（@path）も無いときだけ読み取りとする。
+//
+// 知らないフラグがあれば、値を取るかが分からずエンドポイントを特定できないので偽を返す。
+func readOnlyAPI(args []string) bool {
+	method := ""
+	endpoint := ""
+	hasInput := false
+	var fields []string
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		name, value, joined := splitFlag(arg)
+		switch {
+		case name == "":
+			if endpoint == "" {
+				endpoint = arg
+			}
+			continue
+		case apiBoolFlags[name]:
+			if joined {
+				return false
+			}
+			continue
+		case !apiValueFlags[name]:
+			return false
+		}
+		if !joined {
+			if index+1 >= len(args) {
+				return false
+			}
+			index++
+			value = args[index]
+		}
+		switch name {
+		case "-X", "--method":
+			method = value
+		case "--input":
+			hasInput = true
+		case "-f", "--raw-field", "-F", "--field":
+			fields = append(fields, value)
+		}
+	}
+	if method != "" {
+		return strings.EqualFold(method, "GET")
+	}
+	if hasInput {
+		return false
+	}
+	if strings.TrimPrefix(endpoint, "/") != "graphql" {
+		return len(fields) == 0
+	}
+	for _, field := range fields {
+		_, value, _ := strings.Cut(field, "=")
+		if strings.HasPrefix(value, "@") || strings.Contains(strings.ToLower(value), "mutation") {
+			return false
+		}
+	}
+	return true
+}
+
+// splitFlag は arg をフラグの名前と、名前に続けて書いた値（--method=GET・-XGET・-fquery=...）に分ける。
+// フラグでなければ name は空である。
+func splitFlag(arg string) (name, value string, joined bool) {
+	switch {
+	case !strings.HasPrefix(arg, "-") || arg == "-" || arg == "--":
+		return "", "", false
+	case strings.HasPrefix(arg, "--"):
+		name, value, joined = strings.Cut(arg, "=")
+		return name, value, joined
+	case len(arg) > 2:
+		return arg[:2], strings.TrimPrefix(arg[2:], "="), true
+	default:
+		return arg, "", false
+	}
 }
 
 // commandAndCWD は判定するコマンドと、その実行ディレクトリを返す。
