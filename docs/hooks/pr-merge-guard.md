@@ -4,8 +4,8 @@ English | [日本語](pr-merge-guard.ja.md) · [Hooks](../../README.md#hooks)
 
 **Default:** On for Claude Code and Codex.
 
-Blocks agent commands that merge a GitHub pull request. This includes `gh pr merge`, merge REST and GraphQL calls, and
-fetching `pull/N/head` as a starting point for a local merge. It does not block ordinary PR inspection or pushing a
+Blocks agent commands that merge a GitHub pull request. This includes `gh pr merge` and merge REST and GraphQL calls.
+It does not block ordinary PR inspection (including fetching `pull/N/head`) or pushing a
 branch.
 
 To allow merges for one session, start the agent CLI with `AGENT_ALLOW_PR_MERGE=1`. Setting it inside an agent-run shell does not change the hook's environment.

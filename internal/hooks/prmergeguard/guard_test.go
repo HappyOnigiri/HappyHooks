@@ -16,7 +16,6 @@ var (
 	labelAPI     = messages.T(hooktest.Language, idTargetAPI)
 	labelGraphQL = messages.T(hooktest.Language, idTargetGraphQL)
 	labelHTTP    = messages.T(hooktest.Language, idTargetHTTP)
-	labelFetch   = messages.T(hooktest.Language, idTargetFetch)
 )
 
 // 実行者のシェルで開錠されたままだと拒否のテストが全滅して気付きにくいので、先に外す。
@@ -66,7 +65,6 @@ func TestBlocksPathPrefixedInvocation(t *testing.T) {
 		{Command: "/usr/local/bin/gh pr merge 1", Label: labelPRMerge},
 		{Command: "/opt/homebrew/bin/gh api -X PUT repos/o/r/pulls/1/merge", Label: labelAPI},
 		{Command: "./gh pr merge 1", Label: labelPRMerge},
-		{Command: "/usr/bin/git fetch origin pull/1/head", Label: labelFetch},
 	})
 }
 
@@ -111,17 +109,6 @@ func TestBlocksHTTPClient(t *testing.T) {
 		{Command: "curl -s https://api.github.com/repos/o/r/pulls/1/merge", Label: labelHTTP},
 		{Command: "wget --method=PUT https://api.github.com/repos/o/r/pulls/1/merge", Label: labelHTTP},
 		{Command: "curl --method PUT https://api.github.com/x", Label: labelHTTP},
-	})
-}
-
-func TestBlocksPRHeadFetch(t *testing.T) {
-	check(t, hooktest.Deny, []hooktest.Case{
-		{Command: "git fetch origin pull/123/head", Label: labelFetch},
-		{Command: "git fetch origin pull/123/head:pr-123", Label: labelFetch},
-		{Command: "rtk git fetch origin pull/1/head", Label: labelFetch},
-		{Command: "git fetch origin +refs/pull/1/head:refs/remotes/pr/1", Label: labelFetch},
-		{Command: "git fetch upstream refs/pull/9/head", Label: labelFetch},
-		{Command: "git fetch origin +pull/1/head:pr", Label: labelFetch},
 	})
 }
 
@@ -194,6 +181,14 @@ func TestAllowsGitOperationsByPolicy(t *testing.T) {
 		"git fetch --all --prune",
 		"git fetch origin pull-request-123",
 		"git fetch origin refs/heads/pull",
+		// PR の head の取得は調査にも使い、マージそのものではないので止めない。
+		"git fetch origin pull/123/head",
+		"git fetch origin pull/123/head:pr-123",
+		"rtk git fetch origin pull/1/head",
+		"/usr/bin/git fetch origin pull/1/head",
+		"git fetch origin +refs/pull/1/head:refs/remotes/pr/1",
+		"git fetch upstream refs/pull/9/head",
+		"git fetch origin +pull/1/head:pr",
 	))
 }
 
@@ -360,7 +355,6 @@ var unlockCases = []string{
 	"gh api -X PUT repos/o/r/pulls/1/merge",
 	"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'",
 	"curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge",
-	"git fetch origin pull/1/head",
 }
 
 func TestBlockedWithoutUnlock(t *testing.T) {
