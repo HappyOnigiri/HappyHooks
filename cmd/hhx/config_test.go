@@ -139,8 +139,11 @@ func TestConfigInvalid(t *testing.T) {
 func TestConfigArguments(t *testing.T) {
 	isolate(t)
 	for _, args := range [][]string{
-		{"config"}, {"config", "other"}, {"config", "show", "unknown"},
-		{"config", "show", "pr-merge-guard", "other"}, {"config", "show", "--unknown"},
+		{"config"},
+		{"config", "other"},
+		{"config", "show", "unknown"},
+		{"config", "show", "pr-merge-guard", "other"},
+		{"config", "show", "--unknown"},
 	} {
 		code, stdout, stderr := runCommand(t, "", args...)
 		if code != 2 || stdout != "" || !strings.Contains(stderr, messages.T(i18n.English, idConfigUsage)) {

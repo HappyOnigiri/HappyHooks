@@ -1670,8 +1670,10 @@ func findInlineShell(command, cwd string, depth int) (finding, error) {
 		if strings.Contains(result.token, "__INLINE_SHELL_") {
 			// 置き換え先の名前は書いた覚えのない文字列なので、組み込みの `LKe` と同じく `${…}` に戻して見せる。
 			token := strings.NewReplacer(inlineShellGuarded, "${…:?}", "${"+inlineShellValue+"}", "${…}").Replace(result.token)
-			result = finding{target: idInlineValue, command: result.command, token: token,
-				why: idWhyInlineValue, how: idHowInlineValue}
+			result = finding{
+				target: idInlineValue, command: result.command, token: token,
+				why: idWhyInlineValue, how: idHowInlineValue,
+			}
 		}
 		return result, nil
 	}
@@ -1949,8 +1951,10 @@ func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool
 	case c == ')' && !top.backtick:
 		s.pop()
 		if top.closes && top.inCmdsub && i+1 < len(command) && command[i+1] == ')' && s.found.target == "" {
-			s.found = finding{target: idUnparsedParens, token: parensShown(command, top.start, i+2),
-				why: idWhyUnparsedParens, how: idHowUnparsedParens}
+			s.found = finding{
+				target: idUnparsedParens, token: parensShown(command, top.start, i+2),
+				why: idWhyUnparsedParens, how: idHowUnparsedParens,
+			}
 		}
 		// 配列の代入は先行代入なので、閉じた後も文の先頭が続く。
 		s.cmdStart = top.array

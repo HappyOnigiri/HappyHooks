@@ -184,8 +184,10 @@ func TestNoRuleIsSilent(t *testing.T) {
 	f := newFixture(t)
 	outside := filepath.Join(f.tmp, "outside")
 	_ = os.Mkdir(outside, 0o755)
-	output := hooktest.Output(t, Definition(), string(mustJSON(f.payload(payloadOptions{cwd: outside,
-		toolInput: map[string]any{"command": "ls " + outside}}))), hooktest.Options{})
+	output := hooktest.Output(t, Definition(), string(mustJSON(f.payload(payloadOptions{
+		cwd:       outside,
+		toolInput: map[string]any{"command": "ls " + outside},
+	}))), hooktest.Options{})
 	if output != "" {
 		t.Fatalf("output: %q", output)
 	}

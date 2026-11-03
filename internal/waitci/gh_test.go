@@ -154,13 +154,19 @@ func TestFetchFailuresAreClassified(t *testing.T) {
 		message   string
 	}{
 		{"no pr", failure("no pull requests found for branch \"x\"\n"), true, false, `no pull requests found for branch "x"`},
-		{"fatal", failure("GraphQL: Could not resolve to a PullRequest with the number of 9.\n"), false, false,
-			"GraphQL: Could not resolve to a PullRequest with the number of 9."},
+		{
+			"fatal", failure("GraphQL: Could not resolve to a PullRequest with the number of 9.\n"), false, false,
+			"GraphQL: Could not resolve to a PullRequest with the number of 9.",
+		},
 		{"transient", failure("HTTP 502: Bad Gateway\n"), false, true, "HTTP 502: Bad Gateway"},
 		{"not json", stdout("{ this is not json"), false, true, ""},
 		{"not an object", stdout("[]"), false, true, ""},
-		{"spawn", call{err: errors.New("[Errno 2] No such file or directory: 'gh'")}, false, true,
-			"[Errno 2] No such file or directory: 'gh'"},
+		{
+			"spawn",
+			call{err: errors.New("[Errno 2] No such file or directory: 'gh'")},
+			false, true,
+			"[Errno 2] No such file or directory: 'gh'",
+		},
 	}
 	for _, tc := range cases {
 		_, err := GH{Language: testLanguage, Runner: &fakeRunner{responses: []call{tc.response}}}.Fetch("1")

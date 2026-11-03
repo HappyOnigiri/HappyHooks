@@ -82,12 +82,18 @@ func TestApplyFailures(t *testing.T) {
 		runErr error
 		want   string
 	}{
-		{name: "installer failed", body: "#!/bin/bash\n", output: "hhx install: checksum verification failed\n",
-			runErr: failure, want: "exit status 1"},
-		{name: "nothing replaced", body: "#!/bin/bash\n", output: "Downloading hhx v0.4.0...\n",
-			want: "did not report a replaced binary"},
-		{name: "another version", body: "#!/bin/bash\n", output: "Installed hhx v0.3.0 to /Users/alice/.local/bin/hhx\n",
-			want: "instead of v0.4.0"},
+		{
+			name: "installer failed", body: "#!/bin/bash\n", output: "hhx install: checksum verification failed\n",
+			runErr: failure, want: "exit status 1",
+		},
+		{
+			name: "nothing replaced", body: "#!/bin/bash\n", output: "Downloading hhx v0.4.0...\n",
+			want: "did not report a replaced binary",
+		},
+		{
+			name: "another version", body: "#!/bin/bash\n", output: "Installed hhx v0.3.0 to /Users/alice/.local/bin/hhx\n",
+			want: "instead of v0.4.0",
+		},
 		{name: "empty installer", body: "", want: "is empty"},
 		{name: "oversized installer", body: strings.Repeat("#", maxScriptBytes+1), want: "larger than"},
 	}

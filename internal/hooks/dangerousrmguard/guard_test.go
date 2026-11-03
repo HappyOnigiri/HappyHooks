@@ -614,7 +614,9 @@ func TestBrokenJSONIsNotFailOpen(t *testing.T) {
 
 func TestMalformedPayloadDoesNotCrash(t *testing.T) {
 	for _, value := range []any{
-		nil, map[string]any{"tool_input": nil}, map[string]any{"tool_input": map[string]any{}},
+		nil,
+		map[string]any{"tool_input": nil},
+		map[string]any{"tool_input": map[string]any{}},
 		map[string]any{"tool_input": map[string]any{"command": nil}},
 		map[string]any{"tool_input": map[string]any{"command": []any{"rm -rf /"}}},
 		map[string]any{"tool_input": map[string]any{"command": "rm -rf ."}, "cwd": nil},
@@ -685,8 +687,10 @@ func pathologicalInputs() []struct {
 		{"many_expansions", strings.Repeat("echo ${x:-y}; ", 5000) + "echo ${(f)x}", hooktest.Deny, labelUnparsed},
 		// `$(…)` の中の `))` の分岐。深い `(` の段でも、閉じるたびに外側の `$(` を探し直さない。
 		{"nested_subshells", strings.Repeat("( ", 50000) + "a" + strings.Repeat(")", 50000), "", ""},
-		{"nested_subshells_in_substitution", "echo $(" + strings.Repeat(" (a;", 50000) + strings.Repeat(")", 50001),
-			hooktest.Deny, labelUnparsedParens},
+		{
+			"nested_subshells_in_substitution", "echo $(" + strings.Repeat(" (a;", 50000) + strings.Repeat(")", 50001),
+			hooktest.Deny, labelUnparsedParens,
+		},
 	}
 }
 
@@ -1074,8 +1078,13 @@ func TestSpellsRemoval(t *testing.T) {
 		command string
 		want    int
 	}{
-		{"rm -rf x", 1}, {"rmdir x", 1}, {`r\m x`, 1}, {`r''m x`, 2}, {"echo 'rm -rf x'", 0},
-		{"format", 1}, {"echo hi", 0},
+		{"rm -rf x", 1},
+		{"rmdir x", 1},
+		{`r\m x`, 1},
+		{`r''m x`, 2},
+		{"echo 'rm -rf x'", 0},
+		{"format", 1},
+		{"echo hi", 0},
 	} {
 		_, got, ok := shellReading(tc.command)
 		if !ok || got != tc.want {

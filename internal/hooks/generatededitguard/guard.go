@@ -47,8 +47,10 @@ func Definition() hookrt.Definition {
 			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Bash"},
 			{Agent: hookrt.Claude, Event: "PreToolUse", Matcher: "Edit|Write|MultiEdit|NotebookEdit"},
 			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "Bash", AdditionalContextLimit: contextLimit},
-			{Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "^(apply_patch|Edit|Write)$",
-				AdditionalContextLimit: contextLimit},
+			{
+				Agent: hookrt.Codex, Event: "PreToolUse", Matcher: "^(apply_patch|Edit|Write)$",
+				AdditionalContextLimit: contextLimit,
+			},
 			// 宣言は実行に成功した後に記録する（利用者が実行を拒んだ宣言や、失敗した宣言を残さないため）。
 			{Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash"},
 			{Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", AdditionalContextLimit: contextLimit},

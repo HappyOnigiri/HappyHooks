@@ -367,8 +367,10 @@ func fetchComment(ownerRepo, id, cwd string, cache *store, dirs *dirResolver) (a
 			user = login
 		}
 	}
-	entry := map[string]any{"id": id, "user": user, "path": orValue(fields["path"], "?"),
-		"line": orValue(fields["line"], orValue(fields["original_line"], "?"))}
+	entry := map[string]any{
+		"id": id, "user": user, "path": orValue(fields["path"], "?"),
+		"line": orValue(fields["line"], orValue(fields["original_line"], "?")),
+	}
 	cache.write(name, entry)
 	return entry, nil
 }

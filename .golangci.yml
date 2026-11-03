@@ -55,7 +55,11 @@ linters:
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections: [standard, default, localmodule]
 
 issues:
   max-issues-per-linter: 0

@@ -181,9 +181,11 @@ func TestGitHubURLWithoutPullIsSilent(t *testing.T) {
 
 func TestBrokenStdinIsSilent(t *testing.T) {
 	newFixture(t)
-	for _, raw := range []string{"", "not json at all", "[]", `"github.com/o/r/pull/1"`, `{"prompt": null}`,
+	for _, raw := range []string{
+		"", "not json at all", "[]", `"github.com/o/r/pull/1"`, `{"prompt": null}`,
 		`{"cwd": "/tmp"}`, "{}", "\xff\xfe github.com/o/r/pull/1", `{"prompt": ["github.com/o/r/pull/1"]}`,
-		`{"prompt": "https://github.com/o/r/pull/10088"} x`} {
+		`{"prompt": "https://github.com/o/r/pull/10088"} x`,
+	} {
 		if out := hooktest.Output(t, Definition(), raw, hooktest.Options{}); out != "" {
 			t.Errorf("raw %q: output %q", raw, out)
 		}
@@ -285,8 +287,10 @@ func TestOutputStaysSmall(t *testing.T) {
 	if lines != 3 {
 		t.Fatalf("one PR must take 3 lines, got %d", lines)
 	}
-	f.setPR(t, "o/r", 10088, basePR(map[string]any{"title": strings.Repeat("ぬ", 256), "headRefName": strings.Repeat("x", 255),
-		"baseRefName": strings.Repeat("y", 255)}))
+	f.setPR(t, "o/r", 10088, basePR(map[string]any{
+		"title": strings.Repeat("ぬ", 256), "headRefName": strings.Repeat("x", 255),
+		"baseRefName": strings.Repeat("y", 255),
+	}))
 	if out := f.run(t, "https://github.com/o/r/pull/10088", "", "s2"); len([]rune(out)) >= 3000 {
 		t.Fatalf("the worst case is %d characters", len([]rune(out)))
 	}

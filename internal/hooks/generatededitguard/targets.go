@@ -47,8 +47,10 @@ type bashScan struct {
 
 // scanBash は command の書き込み先の候補（絶対パス）と宣言を返す。cwd は走査を始める作業ディレクトリである。
 func scanBash(command, cwd string) *bashScan {
-	scan := &bashScan{cwd: cwd, seen: map[string]bool{}, direct: map[string]bool{}, copies: map[string][]string{},
-		outputs: map[string]bool{}}
+	scan := &bashScan{
+		cwd: cwd, seen: map[string]bool{}, direct: map[string]bool{}, copies: map[string][]string{},
+		outputs: map[string]bool{},
+	}
 	scan.walk(parseShell(command, 0), 0)
 	return scan
 }
@@ -540,8 +542,10 @@ func awkInPlace(args []word) bool {
 
 // awkFiles は gawk -i inplace の対象のファイルを返す。-f / -e が無ければ最初の引数はプログラムである。
 func awkFiles(args []word) []word {
-	valued := map[string]bool{"-f": true, "-v": true, "-i": true, "-e": true, "-F": true, "--include": true,
-		"--file": true, "--source": true, "--assign": true, "--field-separator": true}
+	valued := map[string]bool{
+		"-f": true, "-v": true, "-i": true, "-e": true, "-F": true, "--include": true,
+		"--file": true, "--source": true, "--assign": true, "--field-separator": true,
+	}
 	program := false
 	for _, arg := range args[1:] {
 		if arg.text == "-f" || arg.text == "-e" || arg.text == "--file" || arg.text == "--source" {
@@ -565,8 +569,10 @@ func awkFiles(args []word) []word {
 func (s *bashScan) copyTargets(name string, args []word) {
 	valued := map[string]bool{"-t": true, "-S": true, "--target-directory": true, "--suffix": true}
 	if name != "cp" && name != "mv" {
-		valued = map[string]bool{"-t": true, "-S": true, "-m": true, "-o": true, "-g": true, "--mode": true,
-			"--owner": true, "--group": true, "--target-directory": true, "--suffix": true}
+		valued = map[string]bool{
+			"-t": true, "-S": true, "-m": true, "-o": true, "-g": true, "--mode": true,
+			"--owner": true, "--group": true, "--target-directory": true, "--suffix": true,
+		}
 	}
 	var directory *word
 	for index := 1; index < len(args); index++ {
@@ -731,9 +737,11 @@ func (s *bashScan) stdinText(c *command, allowFiles bool) string {
 // patchTargets は patch の書き込み先を足す。
 // 引数に元のファイルがあればそれを、-o があればその出力を、どちらも無ければパッチの中のパスを候補にする。
 func (s *bashScan) patchTargets(c *command, args []word) {
-	valued := map[string]bool{"-p": true, "-d": true, "-i": true, "-o": true, "-B": true, "-D": true, "-F": true,
+	valued := map[string]bool{
+		"-p": true, "-d": true, "-i": true, "-o": true, "-B": true, "-D": true, "-F": true,
 		"-g": true, "-r": true, "-V": true, "-Y": true, "-z": true, "--strip": true, "--directory": true,
-		"--input": true, "--output": true}
+		"--input": true, "--output": true,
+	}
 	strip := -1
 	directory := s.cwd
 	var inputs, outputs []word

@@ -159,8 +159,10 @@ func TestMainPushDoesNotInject(t *testing.T) {
 			t.Errorf("%q must inject", command)
 		}
 	}
-	if _, ok := inject(t, "git push origin main", call{cwd: repos.github,
-		response: map[string]any{"stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"}}); !ok {
+	if _, ok := inject(t, "git push origin main", call{
+		cwd:      repos.github,
+		response: map[string]any{"stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"},
+	}); !ok {
 		t.Fatal("push result must take precedence over the command")
 	}
 }
@@ -222,8 +224,10 @@ func TestPRCreateInjects(t *testing.T) {
 
 func TestWorkflowDispatch(t *testing.T) {
 	repos := newRepositories(t)
-	context, _ := inject(t, "gh workflow run deploy.yml --ref main", call{cwd: repos.github, codex: true,
-		response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"}})
+	context, _ := inject(t, "gh workflow run deploy.yml --ref main", call{
+		cwd: repos.github, codex: true,
+		response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"},
+	})
 	mustContain(t, context, messages.T(hooktest.Language, idPostDispatch), "gh run watch 123456789 --exit-status",
 		`"yield_time_ms":3600000`, "write_stdin",
 		messages.Text(hooktest.Language, idDispatchGuidance, map[string]any{"Order": messages.T(hooktest.Language, idOrder)}),
@@ -232,8 +236,10 @@ func TestWorkflowDispatch(t *testing.T) {
 		}))
 	mustNotContain(t, context, "wait-ci --progress")
 
-	context, ok := inject(t, "gh workflow run deploy.yml -R owner/repo", call{cwd: repos.plain, codex: true,
-		response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/987654321"}})
+	context, ok := inject(t, "gh workflow run deploy.yml -R owner/repo", call{
+		cwd: repos.plain, codex: true,
+		response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/987654321"},
+	})
 	if !ok {
 		t.Fatal("dispatch with -R must inject outside a repository")
 	}
@@ -242,8 +248,10 @@ func TestWorkflowDispatch(t *testing.T) {
 
 func TestWorkflowDispatchWithoutURLPollsInOneCommand(t *testing.T) {
 	repos := newRepositories(t)
-	context, _ := inject(t, "gh workflow run deploy.yml --ref main -R owner/repo", call{cwd: repos.plain, codex: true,
-		response: map[string]any{"stdout": "✓ Created"}})
+	context, _ := inject(t, "gh workflow run deploy.yml --ref main -R owner/repo", call{
+		cwd: repos.plain, codex: true,
+		response: map[string]any{"stdout": "✓ Created"},
+	})
 	mustContain(t, context, "gh run list --event workflow_dispatch", "--workflow deploy.yml", "--branch main", "sleep 30",
 		messages.T(hooktest.Language, idMultipleCandidates), messages.T(hooktest.Language, idRegistrationTimeout),
 		"list_rc", "gh run watch", "-R owner/repo")
@@ -251,8 +259,10 @@ func TestWorkflowDispatchWithoutURLPollsInOneCommand(t *testing.T) {
 		t.Errorf("tools.exec_command appears %d times", count)
 	}
 
-	context, _ = inject(t, "gh workflow run deploy.yml --ref main", call{cwd: repos.github,
-		response: map[string]any{"stdout": "Created without a URL"}})
+	context, _ = inject(t, "gh workflow run deploy.yml --ref main", call{
+		cwd:      repos.github,
+		response: map[string]any{"stdout": "Created without a URL"},
+	})
 	mustContain(t, context, "gh run list --event workflow_dispatch", "sleep 30", "timeout:600000")
 }
 
@@ -283,8 +293,10 @@ func TestSilentCases(t *testing.T) {
 
 func TestGitHubPushOutputBeatsANonGitHubCwd(t *testing.T) {
 	repos := newRepositories(t)
-	context, ok := inject(t, "git push origin HEAD", call{cwd: repos.other,
-		response: map[string]any{"exit_code": 0, "stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"}})
+	context, ok := inject(t, "git push origin HEAD", call{
+		cwd:      repos.other,
+		response: map[string]any{"exit_code": 0, "stderr": "To github.com:owner/repo.git\n   abc..def  feature -> feature\n"},
+	})
 	if !ok {
 		t.Fatal("a push to GitHub must inject even from a non-GitHub cwd")
 	}
@@ -293,8 +305,10 @@ func TestGitHubPushOutputBeatsANonGitHubCwd(t *testing.T) {
 
 func TestPushFromAWorkspaceRootInjects(t *testing.T) {
 	repos := newRepositories(t)
-	_, ok := inject(t, "git status --short --branch && git push -u origin fix/x", call{cwd: repos.plain,
-		response: map[string]any{"exit_code": 0, "output": "## fix/x\nTo github.com:owner/repo\n * [new branch]      fix/x -> fix/x\n"}})
+	_, ok := inject(t, "git status --short --branch && git push -u origin fix/x", call{
+		cwd:      repos.plain,
+		response: map[string]any{"exit_code": 0, "output": "## fix/x\nTo github.com:owner/repo\n * [new branch]      fix/x -> fix/x\n"},
+	})
 	if !ok {
 		t.Fatal("a push reported as GitHub must inject from a workspace root")
 	}
