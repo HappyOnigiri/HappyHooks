@@ -285,6 +285,9 @@ func analyzeCommand(command string) (found target, why string) {
 	normalized := normalize(command)
 	for _, rule := range commandRules {
 		if rule.pattern.MatchString(normalized) {
+			if rule.target == idGcloudDelete && staticIAMPermissionCheck(command) {
+				continue
+			}
 			return target{id: rule.target}, rule.why
 		}
 	}
