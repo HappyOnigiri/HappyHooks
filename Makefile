@@ -29,7 +29,7 @@ CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 # GNU make 4 は並列ジョブの出力をまとめて表示するが、GNU make 3.81 (macOS) は混ざる。
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
-.PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint workflow-lint workflow-security-audit \
+.PHONY: build install fmt lint go-lint go-deadcode lines-check mod-tidy-check markdown-lint workflow-lint workflow-security-audit \
 	shell-check reporter-check test test-race-coverage \
 	version-check release release-check install-test uninstall-test test-ja ci ci-checks $(GOLANGCI_LINT) $(ACTIONLINT)
 
@@ -45,7 +45,7 @@ install: build
 fmt: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) fmt ./...
 
-lint: go-lint go-deadcode markdown-lint workflow-lint workflow-security-audit shell-check
+lint: go-lint go-deadcode lines-check markdown-lint workflow-lint workflow-security-audit shell-check
 
 # golangci-lint が govet と gofmt の検査を行うので、別に `go vet` を走らせる必要はない。
 go-lint: $(GOLANGCI_LINT)
@@ -54,6 +54,10 @@ go-lint: $(GOLANGCI_LINT)
 go-deadcode:
 	@output="$$($(GO) tool deadcode -test ./...)"; \
 	if [ -n "$$output" ]; then printf '%s\n' "$$output"; echo "deadcode: unreachable functions found"; exit 1; fi
+
+# Go の実装ファイルの行数の上限。600 行以上は報告だけで、1000 行以上が ci-checks を落とす。
+lines-check:
+	$(GO) run ./tools/checklines
 
 mod-tidy-check:
 	$(GO) mod tidy -diff
