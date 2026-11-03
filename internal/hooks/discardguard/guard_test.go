@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/HappyOnigiri/hhx/internal/config"
+	"github.com/HappyOnigiri/hhx/internal/hookcache"
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooktest"
 	"github.com/HappyOnigiri/hhx/internal/i18n"
@@ -72,6 +73,8 @@ func runTests(m *testing.M) int {
 		}
 	}
 	_ = os.Setenv("HOME", home)
+	// snapshot を作れなかったときの記録は hookcache（XDG_CACHE_HOME か HOME の下）に書くので、一時的な HOME の下へ向ける。
+	_ = os.Unsetenv("XDG_CACHE_HOME")
 	if err := os.Chdir(work); err != nil {
 		panic(err)
 	}
@@ -502,15 +505,113 @@ func TestDenyTargetNotStaticallyResolvable(t *testing.T) {
 	}
 }
 
-// 対象は特定できるが、git 管理下ではない。
-func TestDenySnapshotCannotBeCreated(t *testing.T) {
+// failureLog は、このテストに固有のキャッシュの下にある snapshot を作れなかったときの記録のパスを返す。
+func failureLog(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("XDG_CACHE_HOME") == "" {
+		t.Setenv("XDG_CACHE_HOME", tempDir(t))
+	}
+	dir, err := hookcache.Dir(Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, failureLogName)
+}
+
+// readFailures は記録を行ごとに読む。
+func readFailures(t *testing.T, path string) []failureEntry {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the failure log must exist: %v", err)
+	}
+	var entries []failureEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var entry failureEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("line %q: %v", line, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// snapshot を作れずに deny したら、どの git がどう失敗したかを記録に残す。
+func TestSnapshotFailureIsRecorded(t *testing.T) {
+	log := failureLog(t)
+	repo := tempRepo(t, repoOptions{})
+	gitDir, err := gitOutput(repo, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 一時 index の置き場をディレクトリで塞ぎ、add -A を失敗させる。
+	mkdir(t, filepath.Join(gitDir, snapshotIndexName))
+	command := "git reset --hard && echo <done> & true"
+	got := hooktest.Stdin(t, Definition(), `{"tool_input":{"command":`+strconv.Quote(command)+`},"cwd":`+strconv.Quote(repo)+`,"session_id":"s-1"}`)
+	if got.Decision != hooktest.Deny || !strings.Contains(got.Reason, failedMark) {
+		t.Fatalf("got %+v", got)
+	}
+	entries := readFailures(t, log)
+	if len(entries) != 1 {
+		t.Fatalf("entries: %+v", entries)
+	}
+	entry := entries[0]
+	if entry.SessionID != "s-1" || entry.CWD != repo || entry.Command != command || entry.Target == "" ||
+		entry.HHXVersion == "" || entry.Time == "" {
+		t.Errorf("entry: %+v", entry)
+	}
+	if strings.Join(entry.Args, " ") != "add -A" || entry.ExitCode != 128 || entry.TimedOut || entry.Stderr == "" {
+		t.Errorf("failure: %+v", entry.gitFailure)
+	}
+	// `<>&` は HTML 向けにエスケープせず、そのまま読めるように書く。
+	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "<done> & true") {
+		t.Errorf("the command must be written as is: %s", data)
+	}
+	info, err := os.Stat(log)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("log mode: %v %v", info, err)
+	}
+}
+
+// 記録が上限を超えたら 1 世代だけ退避してから書き足す。
+func TestFailureLogRotates(t *testing.T) {
+	log := failureLog(t)
+	writeFile(t, log, strings.Repeat("x", maxFailureLogSize+1))
+	if err := recordFailure(failureEntry{Command: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(log + ".1"); err != nil || info.Size() != maxFailureLogSize+1 {
+		t.Errorf("rotated: %v %v", info, err)
+	}
+	if entries := readFailures(t, log); len(entries) != 1 || entries[0].Command != "c" {
+		t.Errorf("entries: %+v", entries)
+	}
+}
+
+// 移植元との違い: 対象が存在するディレクトリで、git 管理下でないなら、破棄の git も失敗して失う変更が無いので通す。
+// 移植元は保存できないとして deny していた（grep のパターンに破棄の git を書いたコマンドまで止まっていた）。
+func TestPassOutsideRepository(t *testing.T) {
+	log := failureLog(t)
 	box := newSandbox(t)
 	for _, command := range []string{
 		"cd " + box.notARepo + " && git reset --hard",
 		"git -C " + box.notARepo + " clean -fd",
 		"cd .. && git reset --hard", // サンドボックスの直下は git 管理下でない
+		"cd " + box.notARepo + ` && grep -rn "git checkout -- a.txt" .`,
 	} {
-		expectDeny(t, command, box.repoA, failedMark)
+		expectPass(t, command, box.repoA)
+	}
+	expectPass(t, `grep -rn "git checkout -- a.txt" .`, box.notARepo)
+	if refExists(box.repoA, snapshotRef) {
+		t.Error("nothing in repoA is discarded, so nothing must be saved there")
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Errorf("passing must not write the failure log: %v", err)
+	}
+	// 管理下の対象と管理外の対象が混ざれば、管理下の側だけを保存する。
+	expectPass(t, "git reset --hard && cd "+box.notARepo+" && git reset --hard", box.repoA)
+	if !refExists(box.repoA, snapshotRef) {
+		t.Error("repoA must be saved")
 	}
 }
 
@@ -527,16 +628,21 @@ func TestDenyMissingDirectory(t *testing.T) {
 	expectDeny(t, "git reset --hard", filepath.Join(box.tmp, "gone"), unresolved)
 }
 
-// payload の cwd が空・欠落・文字列でないときは、プロセスの作業ディレクトリ（TestMain で git 管理下でない場所にしている）を見る。
-func TestDenyEmptyCWDFallsBackToProcessCWD(t *testing.T) {
-	expectDeny(t, "git reset --hard", "", failedMark)
-	for _, raw := range []string{
+// payload の cwd が空・欠落・文字列でないときは、プロセスの作業ディレクトリを見る。
+func TestEmptyCWDFallsBackToProcessCWD(t *testing.T) {
+	for index, raw := range []string{
+		hooktest.BashPayload("git reset --hard", "", nil),
 		`{"tool_input": {"command": "git reset --hard"}}`,
 		`{"tool_input": {"command": "git reset --hard"}, "cwd": 123}`,
 		`{"tool_input": {"command": "git reset --hard"}, "cwd": null}`,
 	} {
-		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != hooktest.Deny || !strings.Contains(got.Reason, failedMark) {
-			t.Errorf("raw %s: %+v", raw, got)
+		repo := tempRepo(t, repoOptions{})
+		t.Chdir(repo)
+		if got := hooktest.Stdin(t, Definition(), raw); got.Decision != "" {
+			t.Errorf("case %d %s: %+v", index, raw, got)
+		}
+		if !refExists(repo, snapshotRef) {
+			t.Errorf("case %d %s: the process working directory must be saved", index, raw)
 		}
 	}
 }
@@ -608,7 +714,7 @@ func TestOddInputsPassSilently(t *testing.T) {
 func TestTrailingNewline(t *testing.T) {
 	box := newSandbox(t)
 	checkProtected(t, box.repoA, "git reset --hard\n", "git clean --force\n", "git checkout .\n", "git switch -f\n")
-	expectDeny(t, "git reset --hard\n", box.notARepo, failedMark)
+	expectPass(t, "git reset --hard\n", box.notARepo)
 }
 
 func TestDisabledByConfig(t *testing.T) {
@@ -1441,11 +1547,11 @@ func TestSnapshotParallelInvocations(t *testing.T) {
 	}
 }
 
-// argv の経路では cwd が渡らないので、プロセスの作業ディレクトリ（git 管理下でない）を対象にする。
+// argv の経路では cwd が渡らないので、プロセスの作業ディレクトリを対象にする。
 func TestSnapshotArgvDebugPath(t *testing.T) {
-	got := hooktest.Argv(t, Definition(), "git reset --hard")
-	if got.Decision != hooktest.Deny || !strings.Contains(got.Reason, failedMark) {
-		t.Errorf("got %+v", got)
+	// TestMain で git 管理下でない場所にしているので、失う変更が無く通る。
+	if got := hooktest.Argv(t, Definition(), "git reset --hard"); got.Decision != "" {
+		t.Errorf("argv outside a repository must pass: %+v", got)
 	}
 	repo := tempRepo(t, repoOptions{})
 	t.Chdir(repo)
@@ -1473,11 +1579,17 @@ func TestTimeBudgetFallsToDeny(t *testing.T) {
 	timeBudget, gitTimeout = 300*time.Millisecond, 200*time.Millisecond
 	t.Cleanup(func() { timeBudget, gitTimeout = savedBudget, savedTimeout })
 
+	log := failureLog(t)
 	start := time.Now()
 	expectDeny(t, "git reset --hard", tempDir(t), failedMark)
 	// git は 1 回目の起動で時間切れになる。すぐ終わったなら、時間切れではなく起動の失敗で deny になっている。
 	if elapsed := time.Since(start); elapsed < gitTimeout || elapsed > 5*time.Second {
 		t.Errorf("took %v", elapsed)
+	}
+	// 時間切れは記録で見分けられる（リポジトリでないという失敗と取り違えて通さない）。
+	if entries := readFailures(t, log); len(entries) != 1 || !entries[0].TimedOut ||
+		strings.Join(entries[0].Args, " ") != "rev-parse --show-toplevel" {
+		t.Errorf("entries: %+v", entries)
 	}
 	// git が見つからなくても失敗として deny する。
 	t.Setenv("PATH", t.TempDir())

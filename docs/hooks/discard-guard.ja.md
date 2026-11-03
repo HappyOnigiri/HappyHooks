@@ -7,7 +7,12 @@
 未コミットの変更を破棄する Git コマンドの前に、追跡中・未追跡のファイルを `refs/hhx/discard-snapshot` の reflog に保存します。
 `git reset --hard`、強制的な checkout・switch、`git restore`、`git clean -f` などが対象です。
 保存できればコマンドを通し、対象を特定できない場合や保存に失敗した場合は止めます。
+対象が Git 管理下でないディレクトリなら、破棄する変更が無いので通します（`grep` のパターンにコマンドを書いた場合など）。
 snapshot 自体は作業ツリーと index を変更しません。
+
+保存に失敗して止めたときは、失敗した Git コマンド・終了コード・タイムアウトの有無・stderr を
+`~/.cache/hhx/discard-guard/snapshot-failures.jsonl`（`$XDG_CACHE_HOME` があればその下）に 1 行ずつ記録します。
+1 MiB を超えると `snapshot-failures.jsonl.1` へ退避します。
 
 ## 対象の特定
 
