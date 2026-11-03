@@ -44,7 +44,8 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 - `scripts/`: 配布物のビルド、インストーラーとアンインストーラー、それらのテスト
 - `.github/workflows/`: CI とリリース（[docs/release.md](docs/release.md)）、flaky なテストの起票（`report-flaky-tests.yml`）
 - `.github/scripts/`: flaky なテストの issue を起票する reporter（`actions/github-script` から呼ぶ）
-- `tools/`: 開発用の補助ツール。`tools/citest` は CI のテストで落ちたテストだけを 1 回再実行し、報告を artifact に残す
+- `tools/`: 開発用の補助ツール。`tools/citest` は CI のテストで落ちたテストだけを 1 回再実行し、報告を artifact に残す。
+  `tools/checklines` は Go の実装ファイルの行数を検査する
 
 ## 開発
 
@@ -54,6 +55,9 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
   - パッケージの依存の向き（hook どうしの import、hooktest はテストからだけ）は golangci-lint の depguard が検査する。
   - 外部コマンドは `internal/hookexec` から起動する。`exec.Command` などの直接の起動は golangci-lint の forbidigo が検査し、
     テスト・`internal/hooktest`・`tools/` は対象外とする。意図した例外は該当行の `//nolint:forbidigo` に理由を書く。
+  - Go の実装ファイル（テストを除く）は 1000 行未満にする（`make lines-check`。600 行以上は警告だけ）。
+    超えたら責務ごとに同じパッケージの別ファイルへ移し、600 行未満を目指す。コメントを消したり文を詰めたりして縮めない。
+    分割できないファイルだけ、先頭のコメントに `// linelint:allow-long -- <理由>` を書く。
   - Action は commit の SHA で固定する。zizmor の指摘を意図して残すときは、該当行の `# zizmor: ignore[...]` に理由を書く。
 - CI のジョブは Makefile のターゲットを 1 つずつ走らせる。検査を足すときは Makefile に書き、`ci-checks` と `ci.yml` の matrix の両方へ足す。
 - CI のテストは citest 経由で走り、落ちたテストを 1 回だけ再実行する。再実行で通ったテストは CI を落とさず、
@@ -82,7 +86,7 @@ hook は 1 本につき 1 エントリ（`hhx hook <name>`）で登録し、中�
 
 Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移植と同じ形で移す。
 
-- パッケージは `internal/hooks/<hook 名からハイフンを除いたもの>`。中身は次の 3 つにする。
+- パッケージは `internal/hooks/<hook 名からハイフンを除いたもの>`。中身は次の 3 つを基本にする。
   - `guard.go`: `Definition()`（名前・既定の有効・登録先・一次ゲート・`Run`）と判定のロジック。
     登録先は移植元の Claude の settings と Codex の hooks.json の matcher をそのまま写す。
   - `messages.go`: 理由文のカタログ（ID と英語・日本語の文面）。回避を思いとどまらせるのは理由文だけなので、迂回せず報告するよう文面で促す。
@@ -90,6 +94,8 @@ Python 実装の hook は、`internal/hooks/prmergeguard` などの既存の移�
     Claude Code と Codex の両方に出るので、片方にしか無いツール名を書かない。注入系の hook では、注入する文面と警告をここに置く。
     判定の関数は発火した規則の ID を返し、文面は出力の直前にカタログから組み立てる。
   - `guard_test.go`
+  - 判定のロジックが行数の上限に近づいたら、節や走査器の単位で `guard.go` から兄弟のファイル（`paths.go`・`heredoc.go` など）へ移す。
+    `Definition()`・`run`・判定の入口は `guard.go` に残す。
 - `internal/registry` の一覧へ、移植元の登録順の位置に足す。Makefile の `GO_COVERAGE_PACKAGES` にも足す。
 - 判定は Python の意味を 1 対 1 で移す。書き直して「より正しく」しない。気付いた穴は README の Limits に書くか、別の作業に回す。
   - 例外として、移植元のままではデータを失う穴（discard-guard が別のリポジトリを保存して通すなど）は、1 対 1 よりデータを守ることを優先して直す。
