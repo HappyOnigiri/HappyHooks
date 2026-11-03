@@ -25,8 +25,58 @@ linters:
     - funlen
     - inamedparam
     - revive
+    - gocritic
+    - copyloopvar
+    - makezero
+    - cyclop
+    - depguard
 
   settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+    cyclop:
+      max-complexity: 40
+      package-average: 15
+    # AGENTS.md の不変条件のうち、パッケージの依存の向きで表せるものを強制する。
+    depguard:
+      rules:
+        # hook ごとに誤爆の条件を調整しているので、判定の部品を hook どうしで共有しない。
+        hooks-isolation:
+          files:
+            - "**/internal/hooks/**"
+          deny:
+            - pkg: github.com/HappyOnigiri/hhx/internal/hooks/
+              desc: hooks must not import other hooks; share only via hookrt, pycompat, hookexec, hookcache, toolresponse
+            - pkg: github.com/HappyOnigiri/hhx/internal/registry
+              desc: hooks must not depend on the hook list
+            - pkg: github.com/HappyOnigiri/hhx/internal/install
+              desc: hooks must not edit agent settings
+        # 共通の部品は hook の一覧や個々の hook を知らない。
+        shared-runtime:
+          files:
+            - "**/internal/hookrt/**"
+            - "**/internal/pycompat/**"
+            - "**/internal/hookexec/**"
+            - "**/internal/hookcache/**"
+            - "**/internal/toolresponse/**"
+            - "**/internal/i18n/**"
+            - "**/internal/config/**"
+          deny:
+            - pkg: github.com/HappyOnigiri/hhx/internal/hooks/
+              desc: shared runtime must not depend on individual hooks
+            - pkg: github.com/HappyOnigiri/hhx/internal/registry
+              desc: shared runtime must not depend on the hook list
+            - pkg: github.com/HappyOnigiri/hhx/internal/install
+              desc: shared runtime must not depend on the installer
+        # hooktest はテストからだけ使う。
+        hooktest-only-in-tests:
+          files:
+            - "$all"
+            - "!$test"
+          deny:
+            - pkg: github.com/HappyOnigiri/hhx/internal/hooktest
+              desc: hooktest is for tests only
     exhaustive:
       default-signifies-exhaustive: false
       check:
@@ -55,7 +105,11 @@ linters:
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections: [standard, default, localmodule]
 
 issues:
   max-issues-per-linter: 0

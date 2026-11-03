@@ -1,0 +1,6 @@
+# concurrency.queue は GitHub が受け付けるが、actionlint 1.7.12 の構文表に無い。
+# このキーを使うワークフローでだけ、その診断を除外する。
+paths:
+  .github/workflows/report-flaky-tests.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

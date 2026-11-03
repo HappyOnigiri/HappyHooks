@@ -1670,8 +1670,10 @@ func findInlineShell(command, cwd string, depth int) (finding, error) {
 		if strings.Contains(result.token, "__INLINE_SHELL_") {
 			// 置き換え先の名前は書いた覚えのない文字列なので、組み込みの `LKe` と同じく `${…}` に戻して見せる。
 			token := strings.NewReplacer(inlineShellGuarded, "${…:?}", "${"+inlineShellValue+"}", "${…}").Replace(result.token)
-			result = finding{target: idInlineValue, command: result.command, token: token,
-				why: idWhyInlineValue, how: idHowInlineValue}
+			result = finding{
+				target: idInlineValue, command: result.command, token: token,
+				why: idWhyInlineValue, how: idHowInlineValue,
+			}
 		}
 		return result, nil
 	}
@@ -1901,6 +1903,8 @@ func (s *expansionScanner) step(i int) (last int, ok bool) {
 }
 
 // stepUnquoted はクォートの外（scanCode・scanSubshell・scanBrace）の 1 文字を読む。
+//
+//nolint:cyclop // bash の字句を 1 文字ずつ読む状態機械で、分岐は文字の種類ごとの規則に対応する。分けると状態の受け渡しが増え、判定が変わり得る。
 func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool) {
 	command := s.command
 	c := command[i]
@@ -1949,8 +1953,10 @@ func (s *expansionScanner) stepUnquoted(i int, top scanFrame) (last int, ok bool
 	case c == ')' && !top.backtick:
 		s.pop()
 		if top.closes && top.inCmdsub && i+1 < len(command) && command[i+1] == ')' && s.found.target == "" {
-			s.found = finding{target: idUnparsedParens, token: parensShown(command, top.start, i+2),
-				why: idWhyUnparsedParens, how: idHowUnparsedParens}
+			s.found = finding{
+				target: idUnparsedParens, token: parensShown(command, top.start, i+2),
+				why: idWhyUnparsedParens, how: idHowUnparsedParens,
+			}
 		}
 		// 配列の代入は先行代入なので、閉じた後も文の先頭が続く。
 		s.cmdStart = top.array
@@ -2041,6 +2047,8 @@ func (s *expansionScanner) readHeredocBodies(i int) (last int, ok bool) {
 // expansionHeadParses は組み込みの `Pe` のうち、`${` の直後（i）から名前と添字までを読み、続く文字で `}` に届くかを返す。
 // 演算子（`:`・`#`・`%`・`/`・`^`・`,`・`-`・`=`・`?`・`+`）が続けば、その後ろは読み切れるものとみなす（通す側）。
 // 添字の `]` が見つからないときも通す側に倒す。
+//
+//nolint:cyclop // bash の字句を 1 文字ずつ読む状態機械で、分岐は文字の種類ごとの規則に対応する。分けると状態の受け渡しが増え、判定が変わり得る。
 func expansionHeadParses(command string, i int) bool {
 	at := func(offset int) byte {
 		if i+offset < len(command) {

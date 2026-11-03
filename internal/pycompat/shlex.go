@@ -34,8 +34,10 @@ const (
 // shlex.split(s) は ShlexSplit(s, " \t\r\n", "") にあたる。
 // punctuation を渡すと、その文字の並びを 1 つのトークンにする（punctuation_chars）。
 func ShlexSplit(s, whitespace, punctuation string) ([]string, error) {
-	lexer := &shlexLexer{input: []rune(s), whitespace: whitespace, punctuation: punctuation,
-		state: shlexStateWhitespace, pushback: shlexNoPushbackPending}
+	lexer := &shlexLexer{
+		input: []rune(s), whitespace: whitespace, punctuation: punctuation,
+		state: shlexStateWhitespace, pushback: shlexNoPushbackPending,
+	}
 	var tokens []string
 	for {
 		token, ok, err := lexer.readToken()

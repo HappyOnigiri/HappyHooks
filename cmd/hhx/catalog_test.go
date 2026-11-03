@@ -248,9 +248,12 @@ func TestMessageErrorIsEnglishAndDisplayedInTheLanguage(t *testing.T) {
 func TestWaitCIContractIsTheSameInEveryLanguage(t *testing.T) {
 	check := waitci.Check{Name: "tests", Done: true, Result: "FAILURE", URL: "https://example.test/tests"}
 	outcomes := []waitci.Outcome{
-		{Status: waitci.StatusNoPR}, {Status: waitci.StatusError, Message: "boom"},
-		{Status: waitci.StatusHeadTimeout, Message: "cafe", Elapsed: 5}, {Status: waitci.StatusConflict},
-		{Status: waitci.StatusNoCI, Elapsed: 5}, {Status: waitci.StatusEmptyTimeout, Elapsed: 5},
+		{Status: waitci.StatusNoPR},
+		{Status: waitci.StatusError, Message: "boom"},
+		{Status: waitci.StatusHeadTimeout, Message: "cafe", Elapsed: 5},
+		{Status: waitci.StatusConflict},
+		{Status: waitci.StatusNoCI, Elapsed: 5},
+		{Status: waitci.StatusEmptyTimeout, Elapsed: 5},
 		{Status: waitci.StatusComplete, Head: "abc", Checks: []waitci.Check{check}, Conflicting: true},
 		{Status: waitci.StatusTimeout, Head: "abc", Checks: []waitci.Check{{Name: "build"}}},
 	}

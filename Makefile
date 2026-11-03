@@ -15,6 +15,11 @@ GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal
 	./internal/hooks/agentslocalcontext ./internal/hooks/generatededitguard ./internal/hooks/permissionrequestguard ./internal/hookexec ./internal/hookcache ./internal/toolresponse ./internal/i18n
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
+ACTIONLINT_VERSION := $(shell awk '$$1 == "actionlint" { print $$2 }' .tool-versions)
+ACTIONLINT := bin/actionlint
+# shellcheck は PATH 上のものを、版が一致するか確かめて使う。CI は固定版を sha256 を確かめて入れる。
+SHELLCHECK_VERSION := $(shell awk '$$1 == "shellcheck" { print $$2 }' .tool-versions)
+ZIZMOR_VERSION := $(shell awk '$$1 == "zizmor" { print $$2 }' .tool-versions)
 # CI は CITEST に citest のパスを渡し、落ちたテストだけを 1 回再実行して報告を CI_TEST_ARTIFACT_DIR に残す。
 # 空なら go test をそのまま走らせる。
 CITEST ?=
@@ -24,8 +29,9 @@ CI_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 # GNU make 4 は並列ジョブの出力をまとめて表示するが、GNU make 3.81 (macOS) は混ざる。
 CI_MAKEFLAGS := -j$(CI_JOBS) --keep-going $(if $(filter output-sync,$(.FEATURES)),--output-sync=target)
 
-.PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint reporter-check test test-race-coverage \
-	version-check release release-check install-test uninstall-test test-ja ci ci-checks $(GOLANGCI_LINT)
+.PHONY: build install fmt lint go-lint go-deadcode mod-tidy-check markdown-lint workflow-lint workflow-security-audit \
+	shell-check reporter-check test test-race-coverage \
+	version-check release release-check install-test uninstall-test test-ja ci ci-checks $(GOLANGCI_LINT) $(ACTIONLINT)
 
 build:
 	mkdir -p bin
@@ -39,7 +45,7 @@ install: build
 fmt: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) fmt ./...
 
-lint: go-lint go-deadcode markdown-lint
+lint: go-lint go-deadcode markdown-lint workflow-lint workflow-security-audit shell-check
 
 # golangci-lint が govet と gofmt の検査を行うので、別に `go vet` を走らせる必要はない。
 go-lint: $(GOLANGCI_LINT)
@@ -51,6 +57,7 @@ go-deadcode:
 
 mod-tidy-check:
 	$(GO) mod tidy -diff
+	$(GO) mod verify
 
 markdown-lint:
 	$(GO) run ./tools/checkmarkdownlines
@@ -60,6 +67,28 @@ $(GOLANGCI_LINT):
 		mkdir -p "$(dir $@)"; \
 		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b bin v$(GOLANGCI_LINT_VERSION); \
 	fi
+
+# actionlint は PATH に shellcheck があれば run: の中身も検査する。除外の設定は .github/actionlint.yaml に置く。
+workflow-lint: $(ACTIONLINT)
+	$(ACTIONLINT)
+
+$(ACTIONLINT):
+	@if [ ! -x "$@" ] || [ "$$("$@" -version 2>/dev/null | head -n 1)" != "$(ACTIONLINT_VERSION)" ]; then \
+		mkdir -p "$(dir $@)"; \
+		GOBIN="$(CURDIR)/$(dir $@)" $(GO) install github.com/rhysd/actionlint/cmd/actionlint@v$(ACTIONLINT_VERSION); \
+	fi
+
+# ワークフローの権限・固定していない Action・危険なトリガーを検査する。
+# GitHub の API を使う監査は、結果が通信に左右されないよう --offline で外す。
+# 意図した例外は、該当行の `# zizmor: ignore[...]` に理由を添えて抑止する。
+workflow-security-audit:
+	@command -v pipx >/dev/null || { echo "pipx is required to run zizmor"; exit 1; }
+	pipx run --spec zizmor==$(ZIZMOR_VERSION) zizmor --offline --pedantic --min-severity medium .github
+
+shell-check:
+	@actual="$$(shellcheck --version 2>/dev/null | awk '$$1 == "version:" { print $$2 }')"; \
+	test "$$actual" = "$(SHELLCHECK_VERSION)" || { echo "shellcheck $(SHELLCHECK_VERSION) is required (found '$$actual')"; exit 1; }
+	shellcheck scripts/*.sh
 
 # 起票の reporter と、ワークフロー・Makefile・citest の間の名前の契約を確かめる。
 reporter-check:

@@ -54,8 +54,10 @@ const (
 // Definition は agents-local-context の定義を返す。Codex にだけ登録する（Claude Code は AGENTS.local.md を読まない）。
 func Definition() hookrt.Definition {
 	registration := func(event, matcher string) hookrt.Registration {
-		return hookrt.Registration{Agent: hookrt.Codex, Event: event, Matcher: matcher, Timeout: 10,
-			AdditionalContextLimit: maxContextBytes}
+		return hookrt.Registration{
+			Agent: hookrt.Codex, Event: event, Matcher: matcher, Timeout: 10,
+			AdditionalContextLimit: maxContextBytes,
+		}
 	}
 	return hookrt.Definition{
 		Name:           Name,

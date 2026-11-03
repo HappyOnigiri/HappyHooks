@@ -187,7 +187,8 @@ func placeGroups(list *jsonNode, groups []managedGroup) bool {
 		items = append(items, group)
 	}
 	items = append(items, placed[len(kept)]...)
-	list.items = append(items, tail...)
+	items = append(items, tail...)
+	list.items = items
 	return removed
 }
 

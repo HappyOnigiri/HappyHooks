@@ -5,11 +5,12 @@ on:
     types: [closed]
     branches: [main]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   publish:
+    permissions:
+      contents: write
     if: >-
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
@@ -20,7 +21,7 @@ jobs:
       cancel-in-progress: false
     steps:
       # 成果物とタグを同じ merge コミットへ揃えるため、publish-release と同じ ref を checkout する。
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false

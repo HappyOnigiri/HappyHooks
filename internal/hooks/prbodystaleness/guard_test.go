@@ -29,8 +29,10 @@ func commit(date, headline string, parents int) map[string]any {
 	if headline == "" {
 		headline = "feat: 交換のメモを後から入力できるようにする"
 	}
-	return map[string]any{"commit": map[string]any{"committedDate": date, "messageHeadline": headline,
-		"parents": map[string]any{"totalCount": parents}}}
+	return map[string]any{"commit": map[string]any{
+		"committedDate": date, "messageHeadline": headline,
+		"parents": map[string]any{"totalCount": parents},
+	}}
 }
 
 func pullRequest(over map[string]any) map[string]any {
@@ -54,7 +56,8 @@ func graphql(nodes ...any) map[string]any {
 		nodes = []any{}
 	}
 	return map[string]any{"data": map[string]any{"repository": map[string]any{"object": map[string]any{
-		"associatedPullRequests": map[string]any{"nodes": nodes}}}}}
+		"associatedPullRequests": map[string]any{"nodes": nodes},
+	}}}}
 }
 
 type fixture struct {
@@ -288,7 +291,8 @@ func TestSilentCases(t *testing.T) {
 	}{
 		"body newer than every commit": {graphql: graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": []any{commit(before, "", 1)}}}))},
 		"merge commit alone": {graphql: graphql(pullRequest(map[string]any{"commits": map[string]any{"nodes": []any{
-			commit(before, "", 1), commit(after, "Merge remote-tracking branch 'origin/main'", 2)}}}))},
+			commit(before, "", 1), commit(after, "Merge remote-tracking branch 'origin/main'", 2),
+		}}}))},
 		"no associated pull request": {graphql: graphql()},
 		"closed pull request":        {graphql: graphql(pullRequest(map[string]any{"state": "MERGED"}))},
 		"gh failure after cd":        {mode: "fail", options: call{command: "cd /other/worktree; git push origin HEAD"}},
@@ -373,7 +377,8 @@ func TestNoPullRequestAfterChangingDirectory(t *testing.T) {
 			}
 			if ok {
 				want := messages.Text(hooktest.Language, idNoPR, map[string]any{
-					"Instruction": messages.T(hooktest.Language, idDefaultInstruction)})
+					"Instruction": messages.T(hooktest.Language, idDefaultInstruction),
+				})
 				if context != want {
 					t.Fatalf("context:\n%s\nwant:\n%s", context, want)
 				}
@@ -419,10 +424,13 @@ func TestWaitsUntilTheHeadCatchesUp(t *testing.T) {
 	f := newFixture(t)
 	old := commits("push 前のコミット ", 4)
 	rebased := append(append([]any{}, old...), commits("rebase 後のコミット ", 14)...)
-	f.write(t, "graphql.1.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead,
-		"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, old...)}})))
+	f.write(t, "graphql.1.json", graphql(pullRequest(map[string]any{
+		"headRefOid": staleHead,
+		"commits":    map[string]any{"nodes": append([]any{commit(before, "", 1)}, old...)},
+	})))
 	f.write(t, "graphql.2.json", graphql(pullRequest(map[string]any{
-		"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, rebased...)}})))
+		"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, rebased...)},
+	})))
 	context, ok := f.run(t, call{})
 	if want := expected(t, rebased, false); !ok || context != want {
 		t.Fatalf("context=\n%s\nwant\n%s", context, want)
@@ -447,8 +455,10 @@ func TestGivesUpWhenTheHeadNeverCatchesUp(t *testing.T) {
 			// 少なくとも 1 回は取り直せる長さにする。間隔は、並列に走る他のテストへ負荷をかけない程度に空ける。
 			shortWait(t, 10*time.Second, 3*time.Second)
 			f := newFixture(t)
-			f.write(t, "graphql.json", graphql(pullRequest(map[string]any{"headRefOid": staleHead,
-				"commits": map[string]any{"nodes": append([]any{commit(before, "", 1)}, nodes...)}})))
+			f.write(t, "graphql.json", graphql(pullRequest(map[string]any{
+				"headRefOid": staleHead,
+				"commits":    map[string]any{"nodes": append([]any{commit(before, "", 1)}, nodes...)},
+			})))
 			started := time.Now()
 			context, ok := f.run(t, call{})
 			if elapsed := time.Since(started); elapsed > waitLimit+2*time.Second {
@@ -456,8 +466,10 @@ func TestGivesUpWhenTheHeadNeverCatchesUp(t *testing.T) {
 			}
 			want := expected(t, nodes, true)
 			if nodes == nil {
-				want = messages.Text(hooktest.Language, idLaggingOnly, map[string]any{"Number": "10088", "Seconds": int(waitLimit / time.Second),
-					"Instruction": messages.T(hooktest.Language, idDefaultInstruction), "URL": "https://github.com/o/r/pull/10088"})
+				want = messages.Text(hooktest.Language, idLaggingOnly, map[string]any{
+					"Number": "10088", "Seconds": int(waitLimit / time.Second),
+					"Instruction": messages.T(hooktest.Language, idDefaultInstruction), "URL": "https://github.com/o/r/pull/10088",
+				})
 			}
 			if !ok || context != want {
 				t.Fatalf("context=\n%s\nwant\n%s", context, want)
@@ -726,8 +738,10 @@ func TestParseTime(t *testing.T) {
 			t.Errorf("parseTime(%q)=%v %v, want %s", value, got, ok, want)
 		}
 	}
-	for _, value := range []any{nil, "", "yesterday", 17, "2026-02-30T00:00:00", "2026-09-10T07:10:60", "0000-01-01T00:00:00",
-		"2026-09-10T07:10:57+09:00", "2026-13-01T00:00:00", "2026-09-10 07:10:57", "2026-09-10T24:00:00"} {
+	for _, value := range []any{
+		nil, "", "yesterday", 17, "2026-02-30T00:00:00", "2026-09-10T07:10:60", "0000-01-01T00:00:00",
+		"2026-09-10T07:10:57+09:00", "2026-13-01T00:00:00", "2026-09-10 07:10:57", "2026-09-10T24:00:00",
+	} {
 		if got, ok := parseTime(value); ok {
 			t.Errorf("parseTime(%v)=%v, want unreadable", value, got)
 		}
@@ -821,8 +835,10 @@ func TestMessageFitsTheCodexContextLimit(t *testing.T) {
 		headlines = append(headlines, strings.Repeat("h", 120))
 	}
 	// GitHub の PR のタイトルは 256 文字まで。マルチバイトの文字で埋めてバイト数を最大に近づける。
-	pr := map[string]any{"number": json.Number("123456"), "title": strings.Repeat("あ", 256),
-		"url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456"}
+	pr := map[string]any{
+		"number": json.Number("123456"), "title": strings.Repeat("あ", 256),
+		"url": "https://github.com/" + strings.Repeat("o", 39) + "/" + strings.Repeat("r", 100) + "/pull/123456",
+	}
 	for _, language := range []i18n.Language{i18n.English, i18n.Japanese} {
 		text := messages.Text(language, idNoPR, map[string]any{"Instruction": messages.T(language, idDefaultInstruction)})
 		if len(text) > limit {

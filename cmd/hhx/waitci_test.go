@@ -501,8 +501,10 @@ func TestWaitCIWatchesThroughGH(t *testing.T) {
 	view := `{"headRefOid":"` + strings.Repeat("B", 40) + `","mergeable":"MERGEABLE","statusCheckRollup":[` +
 		`{"__typename":"CheckRun","workflowName":"CI","name":"test","status":"COMPLETED","conclusion":"SUCCESS",` +
 		`"startedAt":"2026-09-09T23:20:01Z","completedAt":"2026-09-09T23:21:31Z"}]}`
-	fake := &fakeWaitCI{runner: &scriptedRunner{repo: true, branch: "feature", head: strings.Repeat("B", 40),
-		gh: map[string][]waitci.Result{"gh pr view --json": {{Stdout: view}}}}}
+	fake := &fakeWaitCI{runner: &scriptedRunner{
+		repo: true, branch: "feature", head: strings.Repeat("B", 40),
+		gh: map[string][]waitci.Result{"gh pr view --json": {{Stdout: view}}},
+	}}
 	installFakeWaitCI(t, fake)
 	code, stdout, stderr := runCommand(t, "", "wait-ci", "--progress", "--all-checks", "--settle", "20", "--interval", "10")
 	want := []string{

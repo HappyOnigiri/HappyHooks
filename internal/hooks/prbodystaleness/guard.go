@@ -57,10 +57,14 @@ func Definition() hookrt.Definition {
 		Name:           Name,
 		DefaultEnabled: true,
 		Registrations: []hookrt.Registration{
-			{Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
-				StatusMessage: statusMessage},
-			{Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
-				StatusMessage: statusMessage, AdditionalContextLimit: 4096},
+			{
+				Agent: hookrt.Claude, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
+				StatusMessage: statusMessage,
+			},
+			{
+				Agent: hookrt.Codex, Event: "PostToolUse", Matcher: "Bash", Timeout: registrationTimeout,
+				StatusMessage: statusMessage, AdditionalContextLimit: 4096,
+			},
 		},
 		Gate:        gate,
 		Run:         run,

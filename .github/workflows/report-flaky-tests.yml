@@ -9,6 +9,7 @@ name: Report flaky tests
 # workflows: の名前は ci.yml の name: と一致していなければ静かに発火しなくなる。
 # `make reporter-check` が両者を突き合わせる。
 on:
+  # zizmor: ignore[dangerous-triggers] fork の run を除外し、既定ブランチの reporter だけを動かす（下の report ジョブ）。
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -28,15 +29,16 @@ concurrency:
   cancel-in-progress: false
   queue: max
 
-permissions:
-  contents: read
-  actions: read
-  issues: write
-  # issue に PR のリンクを残すため、head のブランチから PR を探す。
-  pull-requests: read
+permissions: {}
 
 jobs:
   report:
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      # issue に PR のリンクを残すため、head のブランチから PR を探す。
+      pull-requests: read
     # fork の PR の CI は PR 側の ci.yml で動き、artifact の中身を PR の作成者が自由に作れる。
     # 起票や閉じた issue の開き直しに使われないよう、fork の run は対象外にする。
     # fork で見つかった flaky は、メンテナが workflow_dispatch で明示的に拾う。
@@ -45,12 +47,12 @@ jobs:
     timeout-minutes: 10
     steps:
       # artifact は fork の PR からも届くので、reporter は PR 側ではなく既定ブランチのものを使う。
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/github-script@v9
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           SOURCE_RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
           SOURCE_RUN_ATTEMPT: ${{ inputs.run_attempt || github.event.workflow_run.run_attempt }}

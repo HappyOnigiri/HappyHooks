@@ -636,8 +636,10 @@ func TestGate(t *testing.T) {
 			t.Errorf("gate(%q) must be false", raw)
 		}
 	}
-	for _, raw := range []string{"echo x > a", `echo x \u003e a`, "sed -i x a", `{"file_path":"/a"}`,
-		"*** Update File: a", "hhx " + DeclareCommand} {
+	for _, raw := range []string{
+		"echo x > a", `echo x \u003e a`, "sed -i x a", `{"file_path":"/a"}`,
+		"*** Update File: a", "hhx " + DeclareCommand,
+	} {
 		if !gate([]byte(raw)) {
 			t.Errorf("gate(%q) must be true", raw)
 		}

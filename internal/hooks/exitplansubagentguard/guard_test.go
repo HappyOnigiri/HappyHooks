@@ -412,7 +412,8 @@ func TestAllowedSidechainLaunchIsIgnored(t *testing.T) {
 // sidechain の終了通知は、親のエージェントを終了させない（isSidechain が真の行は丸ごと無視する）。
 func TestBlockedSidechainNotificationIsIgnored(t *testing.T) {
 	line := mustJSON(map[string]any{"isSidechain": true, "message": map[string]any{
-		"content": notificationBody("aaa111bbb222", "completed", "x")}})
+		"content": notificationBody("aaa111bbb222", "completed", "x"),
+	}})
 	expectDeny(t, decide(t, concat(launchPair("toolu_1", "aaa111bbb222", "調査"), []string{line})...), "aaa111bbb222")
 	// isSidechain が真の bool でなければ無視しない（移植元の `is True`）。
 	for _, value := range []string{`"true"`, `1`, `null`, `false`} {
@@ -550,17 +551,34 @@ func TestIDsCompareLikePython(t *testing.T) {
 		}
 	}
 	for _, pair := range [][2]string{
-		{"1", "1"}, {"true", "1"}, {"1", "1.0"}, {"true", "1e0"}, {"false", "0"}, {"0", "-0.0"}, {"null", "null"},
-		{"100", "1e2"}, {"123456789012345678901234567890", "123456789012345678901234567890"}, {"1e400", "2e400"},
-		{`"t"`, `"t"`}, {"0.1", "0.10"}, {"0.1", "0.1000000000000000055511151231257827"},
+		{"1", "1"},
+		{"true", "1"},
+		{"1", "1.0"},
+		{"true", "1e0"},
+		{"false", "0"},
+		{"0", "-0.0"},
+		{"null", "null"},
+		{"100", "1e2"},
+		{"123456789012345678901234567890", "123456789012345678901234567890"},
+		{"1e400", "2e400"},
+		{`"t"`, `"t"`},
+		{"0.1", "0.10"},
+		{"0.1", "0.1000000000000000055511151231257827"},
 	} {
 		if got := decide(t, launch(pair[0], pair[1])...); got.Decision != hooktest.Deny {
 			t.Errorf("id %s and tool_use_id %s must match", pair[0], pair[1])
 		}
 	}
 	for _, pair := range [][2]string{
-		{"1", `"1"`}, {"true", `"true"`}, {"null", `"null"`}, {"null", "0"}, {"0", "false2"}, {"1", "2"},
-		{"1e30", "1000000000000000000000000000000"}, {"1e400", "-1e400"}, {"0.1", "0.2"},
+		{"1", `"1"`},
+		{"true", `"true"`},
+		{"null", `"null"`},
+		{"null", "0"},
+		{"0", "false2"},
+		{"1", "2"},
+		{"1e30", "1000000000000000000000000000000"},
+		{"1e400", "-1e400"},
+		{"0.1", "0.2"},
 	} {
 		if got := decide(t, launch(pair[0], pair[1])...); got.Decision != "" {
 			t.Errorf("id %s and tool_use_id %s must not match", pair[0], pair[1])

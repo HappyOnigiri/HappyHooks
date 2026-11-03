@@ -150,8 +150,10 @@ func TestLinkedWorktreeUsesCommonDir(t *testing.T) {
 	repo := filepath.Join(root, "repo")
 	git := func(args ...string) {
 		t.Helper()
-		command := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo,
-			"-c", "user.name=hook-test", "-c", "user.email=hook-test@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+		command := exec.CommandContext(t.Context(), "git", append([]string{
+			"-C", repo,
+			"-c", "user.name=hook-test", "-c", "user.email=hook-test@example.com", "-c", "commit.gpgsign=false",
+		}, args...)...)
 		command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, output)

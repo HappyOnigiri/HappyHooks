@@ -2,12 +2,13 @@ package waitci
 
 import (
 	"errors"
-	"github.com/HappyOnigiri/hhx/internal/i18n"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HappyOnigiri/hhx/internal/i18n"
 )
 
 // fakeClock は sleep した分だけ進む単調時計である。poll の並びを実時間なしで再現する。
