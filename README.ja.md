@@ -19,6 +19,7 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 | [`pr-merge-guard`](docs/hooks/pr-merge-guard.ja.md) | エージェントによる PR のマージを止める | 有効 |
 | [`discard-guard`](docs/hooks/discard-guard.ja.md) | Git で変更を破棄する前に snapshot を保存する | 有効 |
 | [`idle-wait-guard`](docs/hooks/idle-wait-guard.ja.md) | 時間を埋めるだけのコマンドを止める | 有効 |
+| [`blocking-command-guard`](docs/hooks/blocking-command-guard.ja.md) | 字面で分かる入力待ち・対話操作・終了しない前景実行を止める | 有効 |
 | [`forbidden-term-guard`](docs/hooks/forbidden-term-guard.ja.md) | PR・issue の本文に設定済みの禁止語があれば止める | 有効 |
 | [`irreversible-guard`](docs/hooks/irreversible-guard.ja.md) | 元に戻せない操作を止める | 有効 |
 | [`generated-edit-guard`](docs/hooks/generated-edit-guard.ja.md) | 自動生成ファイルの手編集を止める | 有効 |

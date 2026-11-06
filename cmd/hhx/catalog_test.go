@@ -53,7 +53,7 @@ func TestCatalogIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 全 hook（14 本）・wait-ci・CLI の表が登録されていること。
+	// 全 hook・wait-ci・CLI の表が登録されていること。
 	prefixes := map[string]bool{}
 	for id := range all {
 		prefix, _, _ := strings.Cut(id, ".")
@@ -63,6 +63,7 @@ func TestCatalogIsValid(t *testing.T) {
 		"pr-merge-guard", "idle-wait-guard", "forbidden-term-guard", "git-hookspath-guard", "irreversible-guard",
 		"dangerous-rm-guard", "discard-guard", "exit-plan-subagent-guard", "push-ci-context", "pr-body-staleness",
 		"pr-context", "agents-local-context", "generated-edit-guard", "permission-request-guard", "wait-ci", "cli",
+		"blocking-command-guard",
 	} {
 		if !prefixes[name] {
 			t.Errorf("no messages are registered for %s", name)
