@@ -120,14 +120,14 @@ func run(c *hookrt.Context) error {
 	return nil
 }
 
-// guidanceText は注入する案内を組み立てる。書き出し・待ち方の方針・CLI ごとの待ち方の順に並べる。
+// guidanceText は注入する案内を組み立てる。書き出し・PR の照合・残作業・待ち方の順に並べる。
 func guidanceText(language i18n.Language, input *invocation, trigger kind) string {
 	post := input.event == "PostToolUse"
 	order := messages.T(language, idOrder)
 	var context, label, command, body string
 	if trigger == workflowDispatch {
 		command = workflowWatchCommand(language, input.command, input.response)
-		body = messages.Text(language, idDispatchGuidance, map[string]any{"Order": order})
+		body = messages.T(language, idDispatchGuidance)
 		label = messages.T(language, idLabelDispatch)
 		context = messages.T(language, idPreDispatch)
 		if post {
@@ -135,7 +135,7 @@ func guidanceText(language i18n.Language, input *invocation, trigger kind) strin
 		}
 	} else {
 		command = waitCommand
-		body = messages.Text(language, idGuidance, map[string]any{"Command": waitCommand, "Order": order})
+		body = messages.Text(language, idGuidance, map[string]any{"Command": waitCommand})
 		label = messages.T(language, idLabelWaitCI)
 		context = messages.T(language, idPrePush)
 		if post {
@@ -146,7 +146,10 @@ func guidanceText(language i18n.Language, input *invocation, trigger kind) strin
 	if input.codex {
 		wait = messages.Text(language, idCodex, map[string]any{"Label": label, "Command": py.QuoteJSON(command)})
 	}
-	return context + body + wait
+	if trigger == pushOrPR {
+		context += messages.T(language, idPRReview)
+	}
+	return context + order + body + wait
 }
 
 // read は判定の材料を読む。nil を返したら無出力で終える。

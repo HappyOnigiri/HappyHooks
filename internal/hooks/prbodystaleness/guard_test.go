@@ -212,6 +212,13 @@ func TestUpdateInstructionCanBeReplaced(t *testing.T) {
 		"Update the body with gh pr edit.": "\n- Update the body with gh pr edit." + afterInstruction(),
 	} {
 		context, _ := f.run(t, call{config: "hooks:\n  pr-body-staleness:\n    update-instruction: \"" + value + "\"\n"})
+		completion := completionEN
+		if hooktest.Language == i18n.Japanese {
+			completion = completionJA
+		}
+		if !strings.Contains(context, completion) {
+			t.Errorf("custom update instructions must retain the completion requirement: %s", context)
+		}
 		if !strings.Contains(context, want) {
 			t.Errorf("update-instruction %q must end the sentence before the next one:\n%s", value, context)
 		}

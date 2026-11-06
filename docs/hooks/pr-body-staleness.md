@@ -9,7 +9,10 @@ commits, it asks the agent to check whether the title and body still describe th
 A newer commit does not automatically mean the body is wrong. Editing only the title does not reset the check, because
 the hook compares commit dates with the body's last edit time.
 
-The default guidance refers to the `update-pr` skill. To replace it, set `hooks.pr-body-staleness.update-instruction` in `~/.config/hhx/config.yaml`:
+The default guidance tells the agent to update the title and body in this turn using available tools; no particular skill is required.
+It must complete the check and any necessary update before waiting for CI, and report why if no update is needed.
+Unless a higher-priority instruction requires approval, it must not hand the update back to the user as a recommendation or follow-up task.
+To replace it, set `hooks.pr-body-staleness.update-instruction` in `~/.config/hhx/config.yaml`:
 
 ```yaml
 hooks:
