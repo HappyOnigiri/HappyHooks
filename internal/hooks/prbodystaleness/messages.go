@@ -26,21 +26,20 @@ var messages = i18n.Register(i18n.Catalog{
 			"- Check whether the title or body disagrees with these commits " +
 			"(whether the title still describes the change, whether behavior that is not in the body was added, " +
 			"and whether what the body says it will do has changed).\n" +
-			"- {{.Instruction}} If the title and body match the diff, no update is needed; just report that.\n" +
+			completionEN + "- {{.Instruction}} If the title and body match the diff, no update is needed; report why.\n" +
 			"- PR: {{.URL}}",
 		JA: "push が成功した。PR #{{.Number}} の本文は、以下 {{.Count}} 件のコミットより前に書かれている。\n{{.Commits}}\n" +
 			"- タイトルと本文の記述がこれらのコミットの内容と食い違っていないか確認すること" +
 			"（タイトルが変更の中身を表しているか、本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
-			"- {{.Instruction}}タイトルと本文が差分と一致していれば更新は不要で、その旨だけ報告すればよい。\n" +
+			completionJA + "- {{.Instruction}}タイトルと本文が差分と一致していれば更新は不要で、更新不要の理由を報告する。\n" +
 			"- PR: {{.URL}}",
 	},
 	// 載せきれなかったコミットの件数の行。
 	idMoreCommits: {EN: "\n  - ({{.Count}} more)", JA: "\n  - (ほか {{.Count}} 件)"},
 	// タイトルと本文の更新方法の案内の既定値。設定の update-instruction があればそちらを使う（利用者の文は訳さない）。
 	idDefaultInstruction: {
-		EN: "If they disagree, update the title and body with the update-pr skill " +
-			"(or its `local-*` version if the project has one).",
-		JA: "食い違いがあれば update-pr スキル（プロジェクトに `local-*` 版があればそちら）でタイトルと本文を更新する。",
+		EN: "If they disagree, update the title and body in this turn using the tools available in your environment.",
+		JA: "食い違いがあれば、利用できるツールでこのターン中にタイトルと本文を更新する。",
 	},
 	// idStale の末尾に足す行。GitHub の一覧が push に追いつかないまま待ちの上限に達したので、上の一覧に push した
 	// コミットが欠けているかもしれないと伝え、それらのコミットとも突き合わせさせる。
@@ -59,13 +58,13 @@ var messages = i18n.Register(i18n.Catalog{
 			"- Check whether the title or body disagrees with the commits you just pushed " +
 			"(whether the title still describes the change, whether behavior that is not in the body was added, " +
 			"and whether what the body says it will do has changed).\n" +
-			"- {{.Instruction}} If the title and body match the diff, no update is needed; just report that.\n" +
+			completionEN + "- {{.Instruction}} If the title and body match the diff, no update is needed; report why.\n" +
 			"- PR: {{.URL}}",
 		JA: "push が成功したが、{{.Seconds}} 秒待っても GitHub の PR #{{.Number}} のコミット一覧に push した HEAD が載らなかった。" +
 			"そのため、本文がいま push したコミットより前に書かれたかを判定できていない。\n" +
 			"- タイトルと本文の記述がいま push したコミットの内容と食い違っていないか確認すること" +
 			"（タイトルが変更の中身を表しているか、本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
-			"- {{.Instruction}}タイトルと本文が差分と一致していれば更新は不要で、その旨だけ報告すればよい。\n" +
+			completionJA + "- {{.Instruction}}タイトルと本文が差分と一致していれば更新は不要で、更新不要の理由を報告する。\n" +
 			"- PR: {{.URL}}",
 	},
 	// idStale・idLaggingOnly の PR の行の後に足す、現在のタイトルの行。差分と突き合わせる対象を示す。
@@ -80,14 +79,24 @@ var messages = i18n.Register(i18n.Catalog{
 			"check whether its title or body disagrees with the commits you just pushed " +
 			"(whether the title still describes the change, whether behavior that is not in the body was added, " +
 			"and whether what the body says it will do has changed).\n" +
-			"- {{.Instruction}} If the title and body match the diff, or the branch has no PR, " +
-			"no update is needed; just report that.",
+			completionEN + "- {{.Instruction}} If the title and body match the diff, or the branch has no PR, " +
+			"no update is needed; report why no update is needed.",
 		JA: "push が成功したが、この hook が見たディレクトリの HEAD に紐づく open の PR は無かった。" +
 			"push の前に cd か git -C でディレクトリを移しているので、push したブランチの PR をこの hook は確認できていない可能性がある。\n" +
 			"- push したブランチに open の PR があれば、そのタイトルと本文がいま push したコミットの内容と食い違っていないか確認すること" +
 			"（タイトルが変更の中身を表しているか、本文に無い挙動が増えていないか、本文が「やる」と書いた内容が変わっていないか）。\n" +
-			"- {{.Instruction}}タイトルと本文が差分と一致している、またはそのブランチに PR が無ければ更新は不要で、その旨だけ報告すればよい。",
+			completionJA + "- {{.Instruction}}タイトルと本文が差分と一致している、またはそのブランチに PR が無ければ更新は不要で、更新不要の理由を報告する。",
 	},
 	// 文末の記号が無い update-instruction に足す記号。
 	idSentenceEnd: {EN: ".", JA: "。"},
 })
+
+// 更新方法の設定にかかわらず、照合と更新を待機前に完了させる。
+const completionEN = "- For an existing PR, check the title/body against the full PR diff " +
+	"and complete any necessary update before waiting for CI. " +
+	"Unless a higher-priority instruction requires approval, do not hand the update back to the user " +
+	"as a recommendation or follow-up task.\n"
+
+const completionJA = "- 対象 PR がある場合は、PR 全体の差分とタイトル・本文を照合し、必要な更新を CI 待機前に完了する。" +
+	"上位の指示で承認が必要な場合を除き、" +
+	"更新を推奨事項や残作業としてユーザーへ差し戻さない。\n"

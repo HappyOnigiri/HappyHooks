@@ -132,7 +132,7 @@ func TestPushInjectsBashGuidance(t *testing.T) {
 		t.Fatal("push must inject")
 	}
 	mustContain(t, context, messages.T(hooktest.Language, idPostPush),
-		messages.Text(hooktest.Language, idGuidance, map[string]any{"Command": waitCommand, "Order": messages.T(hooktest.Language, idOrder)}),
+		messages.Text(hooktest.Language, idGuidance, map[string]any{"Command": waitCommand}),
 		"timeout:600000", "`hhx wait-ci --progress`\n")
 	mustNotContain(t, context, "functions.exec", "write_stdin")
 }
@@ -204,14 +204,35 @@ func TestClaudeDoesNotInheritCodexInstructions(t *testing.T) {
 	mustNotContain(t, context, "functions.exec", "functions.wait")
 }
 
+// hook の実経路で、PR の照合を先に指示し、dispatch には照合を要求しないことを確かめる。
 func TestWaitIsOrderedAfterRemainingWork(t *testing.T) {
 	repos := newRepositories(t)
-	for command, response := range map[string]any{
-		"git push origin HEAD":                  nil,
-		"gh workflow run deploy.yml --ref main": map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"},
-	} {
-		context, _ := inject(t, command, call{cwd: repos.github, response: response})
-		mustContain(t, context, messages.T(hooktest.Language, idOrder))
+	for _, codex := range []bool{false, true} {
+		for _, event := range []string{"PreToolUse", "PostToolUse"} {
+			for _, command := range []string{"git push origin HEAD", "gh pr create --draft", "gh workflow run deploy.yml --ref main"} {
+				context, ok := inject(t, command, call{
+					cwd: repos.github, codex: codex, event: event,
+					response: map[string]any{"stdout": "https://github.com/owner/repo/actions/runs/123456789"},
+				})
+				if !ok {
+					t.Fatalf("%s must inject", command)
+				}
+				order := strings.Index(context, messages.T(hooktest.Language, idOrder))
+				review := strings.Index(context, messages.T(hooktest.Language, idPRReview))
+				guidance := messages.Text(hooktest.Language, idGuidance, map[string]any{"Command": waitCommand})
+				if strings.Contains(command, "workflow") {
+					if review >= 0 {
+						t.Fatal("dispatch must not request a PR update")
+					}
+					guidance = messages.T(hooktest.Language, idDispatchGuidance)
+				} else if review < 0 || review >= order {
+					t.Fatalf("PR review must precede remaining work: %s", context)
+				}
+				if order < 0 || order >= strings.Index(context, guidance) {
+					t.Fatalf("remaining work must precede waiting: %s", context)
+				}
+			}
+		}
 	}
 }
 
@@ -230,7 +251,7 @@ func TestWorkflowDispatch(t *testing.T) {
 	})
 	mustContain(t, context, messages.T(hooktest.Language, idPostDispatch), "gh run watch 123456789 --exit-status",
 		`"yield_time_ms":3600000`, "write_stdin",
-		messages.Text(hooktest.Language, idDispatchGuidance, map[string]any{"Order": messages.T(hooktest.Language, idOrder)}),
+		messages.T(hooktest.Language, idDispatchGuidance),
 		messages.Text(hooktest.Language, idCodex, map[string]any{
 			"Label": messages.T(hooktest.Language, idLabelDispatch), "Command": `"gh run watch 123456789 --exit-status"`,
 		}))

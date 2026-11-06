@@ -4,7 +4,11 @@ English | [日本語](push-ci-context.ja.md) · [Hooks](../../README.md#hooks)
 
 **Default:** On for Claude Code and Codex.
 
-After a successful `git push` to a branch other than `main`, or `gh pr create`, this hook tells the agent to finish its remaining work.
+After a successful `git push` to a branch other than `main`, or `gh pr create`, this hook tells the agent to compare the target PR's title and body with the full PR diff and update any discrepancies.
+It uses the tools available in the environment; no particular skill is required.
+The order is: check and update the PR, finish other remaining work, wait for CI, then report.
+If no update is needed, the agent reports why; if there is no PR, it skips the check.
+Unless a higher-priority instruction requires approval, it must not hand the update back to the user as a recommendation or follow-up task.
 The agent then runs `hhx wait-ci --progress` to wait for PR checks and report their result once. This avoids repeated short checks and prevents the
 agent from ending its turn before CI finishes.
 Direct pushes to `main` do not trigger this guidance. Running `hhx wait-ci` without a reference on `main` also returns immediately, reporting that there are no PR checks to watch.

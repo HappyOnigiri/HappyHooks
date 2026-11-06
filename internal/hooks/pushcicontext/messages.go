@@ -11,6 +11,7 @@ const (
 	idPostDispatch = "push-ci-context.event.dispatch.post"
 	idPreDispatch  = "push-ci-context.event.dispatch.pre"
 
+	idPRReview         = "push-ci-context.guidance.pr-review"
 	idGuidance         = "push-ci-context.guidance.wait-ci"
 	idDispatchGuidance = "push-ci-context.guidance.dispatch"
 	idOrder            = "push-ci-context.guidance.order"
@@ -35,6 +36,16 @@ var messages = i18n.Register(i18n.Catalog{
 		EN: "If this workflow dispatch succeeds, do the following. ",
 		JA: "この workflow dispatch が成功したら、",
 	},
+	// PR の照合と必要な更新を待機前に済ませ、利用者への差し戻しを防ぐ。特定のスキルは前提にしない。
+	idPRReview: {
+		EN: "Before waiting for CI, compare the target PR's current title and body with the full PR diff, including " +
+			"these changes. If they disagree, update them in this turn using the tools available in your environment. " +
+			"Unless a higher-priority instruction requires approval, do not hand the update back to the user as a " +
+			"recommendation or follow-up task. If no update is needed, report why. Skip this check if there is no PR.\n",
+		JA: "CI 待機前に、対象 PR の現在のタイトル・本文を、今回の変更を含む PR 全体の差分と照合する。" +
+			"食い違いがあれば、利用できるツールでこのターン中に更新する。上位の指示で承認が必要な場合を除き、" +
+			"更新を推奨事項や残作業としてユーザーへ差し戻さない。更新不要なら理由を報告する。対象 PR が無ければ照合は不要。\n",
+	},
 	// push・PR 作成の後は wait-ci で CI の完了まで待たせる。終了コードを失わないこと、失敗は直して追うことも伝える。
 	// detached HEAD や別名のブランチへの push でも PR を探せるので、引数を足したり別の手段で待ったりさせない。
 	idGuidance: {
@@ -42,33 +53,32 @@ var messages = i18n.Register(i18n.Catalog{
 			"detached HEAD and after pushing to a branch whose name differs from the local one, because it finds the PR " +
 			"from the HEAD commit; do not wait some other way. pending / settling means " +
 			"not finished. Do not lose the exit code through a pipe; for exit 0, tell success from a skip by the verdict " +
-			"line. On failure, fix the cause, push again, and follow it until CI completes.\n{{.Order}}",
+			"line. On failure, fix the cause, push again, and follow it until CI completes.\n",
 		JA: "`{{.Command}}` を引数なしで実行し、このターンで終了まで待つ。detached HEAD でも、ローカルと違う名前のブランチへ " +
 			"push した後でも、HEAD の commit から PR を探すのでそのまま使い、別の手段で待たない。pending / settling は未完了。" +
-			"パイプで終了コードを失わず、exit 0 は成功とスキップを結論行で区別する。失敗は原因を直して再pushし、CI完了まで追跡する。\n" +
-			"{{.Order}}",
+			"パイプで終了コードを失わず、exit 0 は成功とスキップを結論行で区別する。失敗は原因を直して再pushし、CI完了まで追跡する。\n",
 	},
 	// workflow dispatch の後は run を watch させる。run ID が無ければ登録確認と watch を 1 回の待機にまとめさせる。
 	idDispatchGuidance: {
 		EN: "The workflow dispatch was accepted. Using the run ID from the returned URL, wait for " +
 			"`gh run watch <run-id> --exit-status` to finish in this turn. If the run ID is not available yet, run the " +
 			"registration loop below and the watch inside a single long-wait tool call, and do not hand control back " +
-			"to the model every 30 seconds.\n{{.Order}}",
+			"to the model every 30 seconds.\n",
 		JA: "workflow dispatch の受付が成功した。返された URL の run ID を使い、" +
 			"`gh run watch <run-id> --exit-status` をこのターンで終了まで待つ。run ID がまだ取得できない" +
 			"場合は、下の登録確認ループと watch を同一の長時間待機ツール呼び出し内で実行し、" +
-			"30秒ごとにモデルへ制御を戻さない。\n{{.Order}}",
+			"30秒ごとにモデルへ制御を戻さない。\n",
 	},
 	// 待機を残作業の後に回させる。CI はモデルの待機と無関係に進むので、先に他の作業を片付けても完了は遅れない。
 	// 逆に先に待つと、PR 本文の更新や別 PR の改修が待ち時間ぶん止まる。
 	idOrder: {
-		EN: "However, leave the wait for the end of this turn. If the user's request or other points in this context " +
-			"(updating the PR body, fixing another PR, applying review comments, and so on) are not started yet, finish " +
+		EN: "Leave the wait for the end of this turn. If the user's request or other points in this context " +
+			"(fixing another PR, applying review comments, and so on) are not started yet, finish " +
 			"them first, and start waiting only when nothing is left. CI progresses whether or not you wait, so doing " +
 			"the work first does not delay its completion. Do not postpone other work because of the wait, and do not " +
 			"report and end the turn before waiting.\n",
-		JA: "ただし待機はこのターンの最後に回す。ユーザーの依頼・このコンテキストに入った他の指摘" +
-			"（PR 本文の更新、別 PR の改修、レビュー指摘の反映など）で未着手のものがあれば先に片付け、" +
+		JA: "待機はこのターンの最後に回す。ユーザーの依頼・このコンテキストに入った他の指摘" +
+			"（別 PR の改修、レビュー指摘の反映など）で未着手のものがあれば先に片付け、" +
 			"残りが無くなってから待機を始める。CI は待機の有無に関わらず進むため、先に作業しても完了は遅れない。" +
 			"待機を理由に他の作業を後回しにしたり、待機前に報告してターンを終えたりしない。\n",
 	},
