@@ -9,6 +9,7 @@ GO_COVERAGE_MIN ?= 85.0
 GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal/install ./internal/registry \
 	./internal/update ./internal/version ./internal/pycompat \
 	./internal/hooks/prmergeguard ./internal/hooks/idlewaitguard ./internal/hooks/forbiddentermguard \
+	./internal/hooks/blockingcommandguard \
 	./internal/hooks/githookspathguard ./internal/hooks/irreversibleguard ./internal/hooks/dangerousrmguard \
 	./internal/hooks/discardguard ./internal/hooks/exitplansubagentguard ./internal/waitci \
 	./internal/hooks/pushcicontext ./internal/hooks/prbodystaleness ./internal/hooks/prcontext \

@@ -19,6 +19,7 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 | [`pr-merge-guard`](docs/hooks/pr-merge-guard.md) | Stops agents from merging PRs | On |
 | [`discard-guard`](docs/hooks/discard-guard.md) | Saves a snapshot before Git commands discard changes | On |
 | [`idle-wait-guard`](docs/hooks/idle-wait-guard.md) | Stops commands used only to fill time | On |
+| [`blocking-command-guard`](docs/hooks/blocking-command-guard.md) | Stops recognizable input waits, interactive commands, and continuous foreground modes | On |
 | [`forbidden-term-guard`](docs/hooks/forbidden-term-guard.md) | Blocks configured terms in PR and issue bodies | On |
 | [`irreversible-guard`](docs/hooks/irreversible-guard.md) | Blocks irreversible operations | On |
 | [`generated-edit-guard`](docs/hooks/generated-edit-guard.md) | Stops hand edits of generated files | On |

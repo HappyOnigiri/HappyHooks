@@ -5,6 +5,7 @@ package registry
 import (
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 	"github.com/HappyOnigiri/hhx/internal/hooks/agentslocalcontext"
+	"github.com/HappyOnigiri/hhx/internal/hooks/blockingcommandguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/dangerousrmguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/discardguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/exitplansubagentguard"
@@ -40,6 +41,7 @@ var definitions = []hookrt.Definition{
 	prcontext.Definition(),
 	generatededitguard.Definition(),
 	permissionrequestguard.Definition(),
+	blockingcommandguard.Definition(),
 }
 
 // All は登録済みの hook をすべて返す。
