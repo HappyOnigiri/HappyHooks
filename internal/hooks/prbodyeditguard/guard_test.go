@@ -59,6 +59,15 @@ func TestEdgeDiagnostics(t *testing.T) {
 		},
 		{"quoted log", current, "> " + strings.ReplaceAll(logs, "\n", "\n> ") + "\n\n" + edited, nil},
 		{"fenced log", current, edited + "\n\n~~~text\n" + hint + "\n~~~", nil},
+		{
+			"log fenced in an ordered list", current,
+			edited + "\n\n10. Logs\n\n    ```text\n    " + strings.ReplaceAll(logs, "\n", "\n    ") + "\n    ```", nil,
+		},
+		{
+			"terminal bytes fenced in an ordered list", current,
+			edited + "\n\n10. Logs\n\n    ```text\n    " + color + "\n    ```",
+			[]finding{{11, 11, idANSI, idTail}},
+		},
 		{"log after a fence", current, edited + "\n~~~text\n" + hint + "\n~~~\n" + logs, []finding{{13, 14, idLogs, idTail}}},
 		{"markdown ANSI example", current, edited + "\n\n```text\n\\x1b[0m\n```", nil},
 		{"distinct diagnostic prefixes", current, edited + "\nformatter: starting\nlinter: starting", nil},

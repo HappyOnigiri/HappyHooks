@@ -77,6 +77,9 @@ func run(c *hookrt.Context) error {
 	}
 	// 診断出力の候補がない本文では、比較のために GitHub を読まない。
 	lines := splitLines(proposed)
+	if !hasDiagnostic(lines, nil) {
+		return nil
+	}
 	excluded := excludedLines(lines)
 	if !hasDiagnostic(lines, excluded) {
 		return nil

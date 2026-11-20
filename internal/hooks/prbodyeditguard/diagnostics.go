@@ -3,7 +3,13 @@ package prbodyeditguard
 import (
 	"iter"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
 )
 
 type finding struct {
@@ -147,37 +153,30 @@ func logPrefix(line string) string {
 	return ""
 }
 
-// excludedLines は明示的な Markdown のコードフェンスと引用を、本文全体の文脈で除外する。
+var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
+// excludedLines は本文全体を GFM として読み、コードフェンスの各行を元の行番号に戻す。
 func excludedLines(lines []string) []bool {
 	excluded := make([]bool, len(lines))
-	var fence byte
-	var width int
+	starts := make([]int, len(lines))
+	offset := 0
 	for i, line := range lines {
-		trimmed := strings.TrimLeft(line, " ")
-		marker, size, tail := fenceMarker(trimmed)
-		switch {
-		case width > 0:
-			excluded[i] = true
-			if len(line)-len(trimmed) <= 3 && marker == fence && size >= width && strings.TrimSpace(tail) == "" {
-				width = 0
+		starts[i] = offset
+		offset += len(line) + 1
+		excluded[i] = strings.HasPrefix(strings.TrimLeft(line, " "), ">")
+	}
+	source := []byte(strings.Join(lines, "\n"))
+	doc := markdown.Parser().Parse(text.NewReader(source))
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering && node.Kind() == ast.KindFencedCodeBlock {
+			segments := node.Lines()
+			for i := 0; i < segments.Len(); i++ {
+				line := sort.SearchInts(starts, segments.At(i).Start+1) - 1
+				excluded[line] = true
 			}
-		case len(line)-len(trimmed) <= 3 && size >= 3:
-			fence, width = marker, size
-			excluded[i] = true
-		case strings.HasPrefix(trimmed, ">"):
-			excluded[i] = true
+			return ast.WalkSkipChildren, nil
 		}
-	}
+		return ast.WalkContinue, nil
+	})
 	return excluded
-}
-
-func fenceMarker(line string) (marker byte, count int, tail string) {
-	if len(line) == 0 || (line[0] != '`' && line[0] != '~') {
-		return 0, 0, ""
-	}
-	marker = line[0]
-	for count < len(line) && line[count] == marker {
-		count++
-	}
-	return marker, count, line[count:]
 }
