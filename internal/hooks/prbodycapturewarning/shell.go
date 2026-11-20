@@ -19,7 +19,7 @@ func unsafeCapture(command string, repl bool) bool {
 		return false
 	}
 	unsafe := false
-	routes := []outputRoute{{}}
+	routes := []outputRoute{terminalRoute}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
 			routes = routes[:len(routes)-1]
@@ -37,12 +37,12 @@ func unsafeCapture(command string, repl bool) bool {
 			default:
 				if readsPRBody(node) {
 					result := outputRouting(route, node.Redirs)
-					unsafe = result.merged || (repl && !result.stdout)
+					unsafe = result.merged() || (repl && result.stdout == terminalRoute.stdout)
 				}
 			}
 		case *syntax.CmdSubst:
 			// コマンド置換の stdout は外側のリダイレクト先ではなく変数などに取り込まれる。
-			route = outputRoute{}
+			route = terminalRoute
 		case *syntax.BinaryCmd:
 			// |& は、左辺の明示的なリダイレクトの後に 2>&1 を適用する。
 			unsafe = node.Op == syntax.PipeAll && readsPRBody(node.X)
@@ -57,43 +57,81 @@ func unsafeCapture(command string, repl bool) bool {
 }
 
 type outputRoute struct {
-	stdout, merged bool
+	stdout, stderr destination
+	nextID         int
+}
+
+type destination struct {
+	file   string
+	id     int
+	closed bool
+}
+
+var terminalRoute = outputRoute{stdout: destination{id: 1}, stderr: destination{id: 2}, nextID: 2}
+
+func (r outputRoute) merged() bool {
+	return !r.stdout.closed && r.stdout == r.stderr
+}
+
+func (r *outputRoute) newDestination(file string) destination {
+	if file != "" {
+		return destination{file: file}
+	}
+	r.nextID++
+	return destination{id: r.nextID}
 }
 
 // outputRouting は継承した出力先に、リダイレクトを左から適用する。
 func outputRouting(route outputRoute, redirs []*syntax.Redirect) outputRoute {
-	stdout, merged := route.stdout, route.merged
 	for _, redir := range redirs {
-		switch redir.Op.String() {
+		op := redir.Op.String()
+		switch op {
 		case "&>", "&>>":
-			stdout, merged = true, true
+			route.stdout = route.newDestination(literal(redir.Word))
+			route.stderr = route.stdout
 		case ">", ">>", ">|", ">&", "<&":
-			if redir.Op.String() == "<&" && redir.N == nil {
-				continue
-			}
-			fd := "1"
-			if redir.N != nil {
-				fd = redir.N.Value
-			}
-			target := literal(redir.Word)
-			dup := redir.Op.String() == ">&" || redir.Op.String() == "<&"
-			if redir.N == nil && redir.Op.String() == ">&" && target != "-" && !isDescriptor(target) {
-				stdout, merged = true, true
-				continue
-			}
-			switch fd {
-			case "1":
-				if !dup || target != "1" {
-					stdout, merged = true, dup && target == "2"
-				}
-			case "2":
-				if !dup || target != "2" {
-					merged = dup && target == "1"
-				}
-			}
+			route.redirect(redir, op)
 		}
 	}
-	return outputRoute{stdout: stdout, merged: merged}
+	return route
+}
+
+func (r *outputRoute) redirect(redir *syntax.Redirect, op string) {
+	fd := "1"
+	if redir.N != nil {
+		fd = redir.N.Value
+	} else if op == "<&" {
+		return
+	}
+	if fd != "1" && fd != "2" {
+		return
+	}
+	target := literal(redir.Word)
+	if redir.N == nil && op == ">&" && target != "-" && !isDescriptor(target) {
+		r.stdout = r.newDestination(target)
+		r.stderr = r.stdout
+		return
+	}
+	var dest destination
+	if op == ">&" || op == "<&" {
+		switch target {
+		case "1":
+			dest = r.stdout
+		case "2":
+			dest = r.stderr
+		case "-":
+			dest.closed = true
+		default:
+			dest = r.newDestination("")
+		}
+	} else {
+		dest = r.newDestination(target)
+	}
+	if fd == "1" {
+		r.stdout = dest
+	} else {
+		r.stderr = dest
+	}
 }
 
 func isDescriptor(value string) bool {

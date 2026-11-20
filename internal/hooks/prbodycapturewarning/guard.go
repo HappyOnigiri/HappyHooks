@@ -34,7 +34,8 @@ func Definition() hookrt.Definition {
 func gate(input []byte) bool {
 	return bytes.Contains(input, []byte("gh")) && bytes.Contains(input, []byte("body")) &&
 		(bytes.Contains(input, []byte(".text")) || bytes.Contains(input, []byte("&")) ||
-			bytes.Contains(input, []byte(`\u0026`)))
+			bytes.Contains(input, []byte(`\u0026`)) || bytes.Contains(input, []byte("2>")) ||
+			bytes.Contains(input, []byte(`2\u003e`)))
 }
 
 // 閉じバッククォートまでをシェル構文として読み、後続に .text() があれば REPL の合流も判定する。
