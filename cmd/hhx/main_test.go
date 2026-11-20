@@ -165,7 +165,8 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=30 statusMessage=Checking PR body freshness..., " +
 			"generated-edit-guard",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
-			"forbidden-term-guard, idle-wait-guard, generated-edit-guard, blocking-command-guard, pr-body-capture-warning",
+			"forbidden-term-guard, idle-wait-guard, generated-edit-guard, blocking-command-guard, pr-body-capture-warning, " +
+			"pr-body-edit-guard timeout=10",
 		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard, generated-edit-guard",
 		"PreToolUse [ExitPlanMode] exit-plan-subagent-guard",
 		"PreToolUse [REPL] pr-body-capture-warning",
@@ -181,7 +182,7 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		"PreToolUse [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard, " +
 			"generated-edit-guard additionalContextLimit=4096, blocking-command-guard, " +
-			"pr-body-capture-warning additionalContextLimit=4096",
+			"pr-body-capture-warning additionalContextLimit=4096, pr-body-edit-guard timeout=10",
 		"PreToolUse [^(apply_patch|Edit|Write)$] git-hookspath-guard, irreversible-guard, " +
 			"generated-edit-guard additionalContextLimit=4096",
 		"SessionStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",

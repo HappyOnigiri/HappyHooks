@@ -12,7 +12,8 @@ GO_COVERAGE_PACKAGES := ./cmd/hhx ./internal/config ./internal/hookrt ./internal
 	./internal/hooks/blockingcommandguard \
 	./internal/hooks/githookspathguard ./internal/hooks/irreversibleguard ./internal/hooks/dangerousrmguard \
 	./internal/hooks/discardguard ./internal/hooks/exitplansubagentguard ./internal/waitci \
-	./internal/hooks/pushcicontext ./internal/hooks/prbodystaleness ./internal/hooks/prbodycapturewarning ./internal/hooks/prcontext \
+	./internal/hooks/pushcicontext ./internal/hooks/prbodystaleness ./internal/hooks/prbodycapturewarning \
+	./internal/hooks/prbodyeditguard ./internal/hooks/prcontext \
 	./internal/hooks/agentslocalcontext ./internal/hooks/generatededitguard ./internal/hooks/permissionrequestguard ./internal/hookexec ./internal/hookcache ./internal/toolresponse ./internal/i18n
 GOLANGCI_LINT_VERSION := $(shell awk '$$1 == "golangci-lint" { print $$2 }' .tool-versions)
 GOLANGCI_LINT := bin/golangci-lint
