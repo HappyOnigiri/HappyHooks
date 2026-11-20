@@ -30,6 +30,8 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 | [`pr-context`](docs/hooks/pr-context.md) | Adds context about PR links in prompts | On |
 | [`push-ci-context`](docs/hooks/push-ci-context.md) | Explains how to wait for CI after a push | On |
 | [`pr-body-staleness`](docs/hooks/pr-body-staleness.md) | Flags PR descriptions that may be out of date | On |
+| [`pr-body-capture-warning`](docs/hooks/pr-body-capture-warning.md) | Warns when fetching a PR body can mix it with diagnostic output | On |
+| [`pr-body-edit-guard`](docs/hooks/pr-body-edit-guard.md) | Stops PR edits that appear to add diagnostic output at either end of the body | On |
 | [`agents-local-context`](docs/hooks/agents-local-context.md) | Adds applicable `AGENTS.local.md` instructions | On (Codex) |
 
 ## Install

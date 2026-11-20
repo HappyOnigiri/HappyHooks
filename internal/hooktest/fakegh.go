@@ -44,6 +44,7 @@ type FakeGH struct {
 type FakeGHCall struct {
 	Argv []string `json:"argv"`
 	Cwd  string   `json:"cwd"`
+	Repo string   `json:"repo,omitempty"`
 }
 
 // NewFakeGH は偽の gh を PATH の先頭に置く。環境変数を t.Setenv で変えるので、並列のテストでは使えない。
@@ -127,12 +128,13 @@ func RunFakeGHIfInvoked() {
 }
 
 func runFakeGH(dir string, argv []string) int {
-	name := fixtureName(argv)
+	repo := os.Getenv("GH_REPO")
+	name := fixtureName(argv, repo)
 	// 記録する前に数えるので、今回の呼び出しは含まない。
 	nth := countCalls(dir, name) + 1
 	// Python の os.getcwd() と同じく、PWD ではなく実体のパスを記録する。
 	cwd, _ := syscall.Getwd()
-	if line, err := json.Marshal(FakeGHCall{Argv: append([]string{}, argv...), Cwd: cwd}); err == nil {
+	if line, err := json.Marshal(FakeGHCall{Argv: append([]string{}, argv...), Cwd: cwd, Repo: repo}); err == nil {
 		flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
 		if log, err := os.OpenFile(filepath.Join(dir, fakeGHCallsLog), flags, 0o600); err == nil {
 			_, _ = log.Write(append(line, '\n'))
@@ -184,16 +186,19 @@ func countCalls(dir, name string) int {
 	count := 0
 	for _, line := range strings.Split(string(data), "\n") {
 		var call FakeGHCall
-		if json.Unmarshal([]byte(line), &call) == nil && fixtureName(call.Argv) == name {
+		if json.Unmarshal([]byte(line), &call) == nil && fixtureName(call.Argv, call.Repo) == name {
 			count++
 		}
 	}
 	return count
 }
 
-func fixtureName(argv []string) string {
+func fixtureName(argv []string, repo string) string {
 	switch {
 	case len(argv) >= 3 && argv[0] == "pr" && argv[1] == "view":
+		if argv[2] == "--json" && repo != "" {
+			return "pr_" + strings.ReplaceAll(repo, "/", "_") + "_current.json"
+		}
 		for index, arg := range argv {
 			if arg == "--repo" && index+1 < len(argv) {
 				return "pr_" + strings.ReplaceAll(argv[index+1], "/", "_") + "_" + argv[2] + ".json"

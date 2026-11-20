@@ -15,6 +15,8 @@ import (
 	"github.com/HappyOnigiri/hhx/internal/hooks/idlewaitguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/irreversibleguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/permissionrequestguard"
+	"github.com/HappyOnigiri/hhx/internal/hooks/prbodycapturewarning"
+	"github.com/HappyOnigiri/hhx/internal/hooks/prbodyeditguard"
 	"github.com/HappyOnigiri/hhx/internal/hooks/prbodystaleness"
 	"github.com/HappyOnigiri/hhx/internal/hooks/prcontext"
 	"github.com/HappyOnigiri/hhx/internal/hooks/prmergeguard"
@@ -42,6 +44,8 @@ var definitions = []hookrt.Definition{
 	generatededitguard.Definition(),
 	permissionrequestguard.Definition(),
 	blockingcommandguard.Definition(),
+	prbodycapturewarning.Definition(),
+	prbodyeditguard.Definition(),
 }
 
 // All は登録済みの hook をすべて返す。
