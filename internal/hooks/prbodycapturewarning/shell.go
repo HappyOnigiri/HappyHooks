@@ -19,27 +19,50 @@ func unsafeCapture(command string, repl bool) bool {
 		return false
 	}
 	unsafe := false
+	routes := []outputRoute{{}}
 	syntax.Walk(file, func(node syntax.Node) bool {
+		if node == nil {
+			routes = routes[:len(routes)-1]
+			return true
+		}
 		if unsafe {
 			return false
 		}
+		route := routes[len(routes)-1]
 		switch node := node.(type) {
 		case *syntax.Stmt:
-			if readsPRBody(node) {
-				stdout, merged := outputRouting(node.Redirs)
-				unsafe = merged || (repl && !stdout)
+			switch node.Cmd.(type) {
+			case *syntax.Block, *syntax.Subshell:
+				route = outputRouting(route, node.Redirs)
+			default:
+				if readsPRBody(node) {
+					result := outputRouting(route, node.Redirs)
+					unsafe = result.merged || (repl && !result.stdout)
+				}
 			}
+		case *syntax.CmdSubst:
+			// コマンド置換の stdout は外側のリダイレクト先ではなく変数などに取り込まれる。
+			route = outputRoute{}
 		case *syntax.BinaryCmd:
 			// |& は、左辺の明示的なリダイレクトの後に 2>&1 を適用する。
 			unsafe = node.Op == syntax.PipeAll && readsPRBody(node.X)
 		}
-		return !unsafe
+		if unsafe {
+			return false
+		}
+		routes = append(routes, route)
+		return true
 	})
 	return unsafe
 }
 
-// outputRouting はリダイレクトを左から評価し、stdout が別の出力先へ移ったか、stdout と stderr が同じ出力先かを返す。
-func outputRouting(redirs []*syntax.Redirect) (stdout, merged bool) {
+type outputRoute struct {
+	stdout, merged bool
+}
+
+// outputRouting は継承した出力先に、リダイレクトを左から適用する。
+func outputRouting(route outputRoute, redirs []*syntax.Redirect) outputRoute {
+	stdout, merged := route.stdout, route.merged
 	for _, redir := range redirs {
 		switch redir.Op.String() {
 		case "&>", "&>>":
@@ -70,7 +93,7 @@ func outputRouting(redirs []*syntax.Redirect) (stdout, merged bool) {
 			}
 		}
 	}
-	return stdout, merged
+	return outputRoute{stdout: stdout, merged: merged}
 }
 
 func isDescriptor(value string) bool {
