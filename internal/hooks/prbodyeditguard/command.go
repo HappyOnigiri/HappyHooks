@@ -1,7 +1,9 @@
 package prbodyeditguard
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -21,26 +23,20 @@ func parseEdit(command, dir string) (editRequest, bool) {
 	if err != nil || len(file.Stmts) == 0 {
 		return editRequest{}, false
 	}
-	stmt := file.Stmts[0]
+	stmt, next := leadingAnd(file.Stmts[0])
 	// Claude Code の Code Mode は作業ディレクトリを cd 'path' && で渡すことがある。
-	if binary, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && binary.Op == syntax.AndStmt {
-		stmt = binary.X
+	if next != nil {
 		if call, ok := simpleCall(stmt); ok && len(call.Assigns) == 0 &&
 			len(call.Args) == 2 && wordText(call.Args[0]) == "cd" {
 			target := wordText(call.Args[1])
 			if target == "" || strings.HasPrefix(target, "-") {
 				return editRequest{}, false
 			}
-			switch {
-			case filepath.IsAbs(target):
-				dir = target
-			case strings.HasPrefix(target, "./"), strings.HasPrefix(target, "../"), target == ".", target == "..":
-				dir += "/" + target
-			default:
-				// CDPATH によって相対パスの解決が変わりうる。
+			dir, ok = cdDirectory(dir, target)
+			if !ok {
 				return editRequest{}, false
 			}
-			stmt = binary.Y
+			stmt = next
 		}
 	}
 	call, ok := simpleCall(stmt)
@@ -59,6 +55,58 @@ func parseEdit(command, dir string) (editRequest, bool) {
 	}
 	ok = edit.parseArgs(call.Args[3:])
 	return edit, ok
+}
+
+// leadingAnd は左結合の && の連鎖から、実行順で先頭の二つの文を返す。
+func leadingAnd(stmt *syntax.Stmt) (first, next *syntax.Stmt) {
+	first = stmt
+	for {
+		and, ok := first.Cmd.(*syntax.BinaryCmd)
+		if !ok || and.Op != syntax.AndStmt {
+			return first, next
+		}
+		first, next = and.X, and.Y
+	}
+}
+
+func cdDirectory(dir, target string) (string, bool) {
+	absolute := filepath.IsAbs(target)
+	explicitRelative := target == "." || target == ".." ||
+		strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../")
+	if !absolute && !explicitRelative {
+		// CDPATH によって相対パスの解決が変わりうる。
+		return "", false
+	}
+	components := strings.Split(target, "/")
+	if !slices.Contains(components, "..") {
+		if absolute {
+			return target, true
+		}
+		return dir + "/" + target, true
+	}
+
+	if absolute {
+		dir = "/"
+	} else {
+		// 起点がシンボリックリンクを含む場合、Bash が使う論理 PWD を特定できない。
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err != nil || resolved != filepath.Clean(dir) {
+			return "", false
+		}
+	}
+	for _, part := range components {
+		if part == ".." {
+			// Bash の既定の cd は、取り消す成分がディレクトリであることも確かめる。
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				return "", false
+			}
+			dir = filepath.Dir(dir)
+			continue
+		}
+		dir = filepath.Join(dir, part)
+	}
+	return dir, true
 }
 
 func simpleCall(stmt *syntax.Stmt) (*syntax.CallExpr, bool) {

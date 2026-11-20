@@ -157,6 +157,10 @@ func TestLiteralEditCommands(t *testing.T) {
 		},
 		{"gh pr edit 12 -F body.md && gh pr view 12", editRequest{dir: "/workspace", selector: "12", bodyFile: "body.md"}},
 		{"cd ./app && gh pr edit 12 -F body.md", editRequest{dir: "/workspace/./app", selector: "12", bodyFile: "body.md"}},
+		{
+			"cd '/workspace/app' && gh pr edit 12 -F body.md && gh pr view 12",
+			editRequest{dir: "/workspace/app", selector: "12", bodyFile: "body.md"},
+		},
 	} {
 		got, ok := parseEdit(tc.command, "/workspace")
 		if !ok || got != tc.want {
@@ -172,5 +176,47 @@ func TestLiteralEditCommands(t *testing.T) {
 		if _, ok := parseEdit(command, "/workspace"); ok {
 			t.Errorf("%s: unexpectedly recognized", command)
 		}
+	}
+}
+
+func TestLogicalCD(t *testing.T) {
+	gh := hooktest.NewFakeGH(t)
+	gh.Write(t, "pr_example_widget_12.json", map[string]string{"body": current})
+	dir := hooktest.TempDir(t)
+	physical := hooktest.TempDir(t)
+	nested := filepath.Join(physical, "nested")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "alias")
+	if err := os.Symlink(nested, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(physical, "proposed body.md"), []byte(current), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "proposed body.md"), []byte(hint+"\n"+current), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, cmd := range []string{
+		"cd ./alias/.. && " + command,
+		"cd '" + link + "/..' && " + command + " && gh pr view 12",
+	} {
+		got := hooktest.Stdin(t, Definition(), hooktest.BashPayload(cmd, dir, nil))
+		if got.Decision != hooktest.Deny {
+			t.Errorf("%s: got %#v, want deny from the logical directory", cmd, got)
+		}
+	}
+	for _, call := range gh.Calls(t) {
+		if call.Cwd != dir {
+			t.Errorf("gh cwd = %s, want %s", call.Cwd, dir)
+		}
+	}
+	if _, ok := parseEdit("cd ./missing/.. && "+command, dir); ok {
+		t.Error("cd through a missing directory was recognized")
+	}
+	if _, ok := parseEdit("cd .. && "+command, link); ok {
+		t.Error("relative cd with an ambiguous logical PWD was recognized")
 	}
 }
