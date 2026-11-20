@@ -123,15 +123,19 @@ func (e editRequest) body() (string, bool) {
 
 func currentBody(edit editRequest) (string, bool) {
 	args := []string{"pr", "view"}
+	var env []string
 	if edit.selector != "" {
 		// 先頭が - のセレクタは parseEdit が受け付けない。
 		args = append(args, edit.selector)
-	}
-	if edit.repo != "" {
-		args = append(args, "--repo", edit.repo)
+		if edit.repo != "" {
+			args = append(args, "--repo", edit.repo)
+		}
+	} else if edit.repo != "" {
+		// view は --repo とセレクタ省略を併用できない。GH_REPO なら現在のブランチから PR を解決する。
+		env = []string{"GH_REPO=" + edit.repo}
 	}
 	args = append(args, "--json", "body")
-	output, ok := hookexec.Output(edit.dir, fetchTimeout, "gh", args...)
+	output, ok := hookexec.OutputWithEnv(edit.dir, fetchTimeout, env, "gh", args...)
 	if !ok {
 		return "", false
 	}

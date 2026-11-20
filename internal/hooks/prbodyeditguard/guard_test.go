@@ -220,3 +220,22 @@ func TestLogicalCD(t *testing.T) {
 		t.Error("relative cd with an ambiguous logical PWD was recognized")
 	}
 }
+
+func TestCurrentBranchWithRepository(t *testing.T) {
+	gh := hooktest.NewFakeGH(t)
+	gh.Write(t, "pr_example_widget_current.json", map[string]string{"body": current})
+	t.Setenv("GH_REPO", "example/other")
+	dir := hooktest.TempDir(t)
+	edit := "gh pr edit --repo example/widget --body '" + color + "\n" + current + "'"
+	got := hooktest.Stdin(t, Definition(), hooktest.BashPayload(edit, dir, nil))
+	if got.Decision != hooktest.Deny {
+		t.Fatalf("got %#v, want deny", got)
+	}
+	want := []hooktest.FakeGHCall{{Argv: []string{"pr", "view", "--json", "body"}, Cwd: dir, Repo: "example/widget"}}
+	if calls := gh.Calls(t); !reflect.DeepEqual(calls, want) {
+		t.Fatalf("gh calls = %#v, want %#v", calls, want)
+	}
+	if repo := os.Getenv("GH_REPO"); repo != "example/other" {
+		t.Errorf("process GH_REPO = %q", repo)
+	}
+}
