@@ -167,6 +167,9 @@ func TestLiteralEditCommands(t *testing.T) {
 	}{
 		{command, editRequest{dir: "/workspace", selector: "12", repo: "example/widget", bodyFile: "proposed body.md"}},
 		{"gh pr edit --body-file=body.md", editRequest{dir: "/workspace", bodyFile: "body.md"}},
+		{"gh pr edit --remove-milestone 12 -F body.md", editRequest{dir: "/workspace", selector: "12", bodyFile: "body.md"}},
+		{"gh pr edit 12 -F body.md --remove-milestone", editRequest{dir: "/workspace", selector: "12", bodyFile: "body.md"}},
+		{"gh pr edit 12 -F body.md --remove-milestone=false", editRequest{dir: "/workspace", selector: "12", bodyFile: "body.md"}},
 		{
 			"gh pr edit https://github.com/example/widget/pull/12 -Fbody.md --title Title",
 			editRequest{dir: "/workspace", selector: "https://github.com/example/widget/pull/12", bodyFile: "body.md"},
@@ -190,6 +193,7 @@ func TestLiteralEditCommands(t *testing.T) {
 	for _, command := range []string{
 		"", "gh pr edit 12 --body-file", "gh pr edit 12 --body-file -", "gh pr edit 12 --title New",
 		"gh pr edit 12 --body-file body.md --body another", "gh pr edit 12 --body-file \"$file\"",
+		"gh pr edit 12 -F body.md --remove-milestone=maybe",
 		"gh pr create --body-file body.md", "echo gh pr edit 12 --body-file body.md",
 		"cd elsewhere && gh pr edit 12 -F body.md", "GH_REPO=example/other gh pr edit 12 -F body.md",
 	} {

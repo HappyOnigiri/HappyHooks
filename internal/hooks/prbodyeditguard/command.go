@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -133,6 +134,14 @@ func (e *editRequest) parseArgs(args []*syntax.Word) bool {
 			continue
 		}
 		flag, value, joined := strings.Cut(arg, "=")
+		if flag == "--remove-milestone" {
+			if joined {
+				if _, err := strconv.ParseBool(value); err != nil {
+					return false
+				}
+			}
+			continue
+		}
 		if !joined && strings.HasPrefix(flag, "-") && !strings.HasPrefix(flag, "--") && len(flag) > 2 {
 			flag, value, joined = flag[:2], flag[2:], true
 		}
