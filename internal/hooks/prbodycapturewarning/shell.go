@@ -19,41 +19,60 @@ func unsafeCapture(command string, repl bool) bool {
 		return false
 	}
 	unsafe := false
-	routes := []outputRoute{terminalRoute}
+	paths := []struct {
+		node  syntax.Node
+		route outputRoute
+		merge bool
+	}{{route: terminalRoute}}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil {
-			routes = routes[:len(routes)-1]
+			paths = paths[:len(paths)-1]
 			return true
 		}
 		if unsafe {
 			return false
 		}
-		route := routes[len(routes)-1]
+		parent := paths[len(paths)-1]
+		current := parent
+		current.node = node
 		switch node := node.(type) {
 		case *syntax.Stmt:
+			current.merge = false
+			if pipe, ok := parent.node.(*syntax.BinaryCmd); ok && isPipe(pipe.Op) {
+				if node == pipe.X {
+					dest := current.route.newDestination("")
+					dest.replCapture = current.route.stdout.replCapture
+					current.route.stdout = dest
+					current.merge = pipe.Op == syntax.PipeAll
+				} else {
+					// 左結合のパイプの結果を次のパイプに渡すのは、その最終段である。
+					current.merge = parent.merge
+				}
+			}
 			switch node.Cmd.(type) {
 			case *syntax.Block, *syntax.Subshell:
-				route = outputRouting(route, node.Redirs)
+				current.route = outputRouting(current.route, node.Redirs, current.merge)
 			default:
 				if readsPRBody(node) {
-					result := outputRouting(route, node.Redirs)
-					unsafe = result.merged() || (repl && result.stdout == terminalRoute.stdout)
+					result := outputRouting(current.route, node.Redirs, current.merge)
+					unsafe = result.merged() || (repl && result.stdout.replCapture)
 				}
 			}
 		case *syntax.CmdSubst:
 			// コマンド置換の stdout は外側のリダイレクト先ではなく変数などに取り込まれる。
-			route = terminalRoute
-		case *syntax.BinaryCmd:
-			// |& は、左辺の明示的なリダイレクトの後に 2>&1 を適用する。
-			unsafe = node.Op == syntax.PipeAll && readsPRBody(node.X)
+			current.route = terminalRoute
 		}
 		if unsafe {
 			return false
 		}
-		routes = append(routes, route)
+		paths = append(paths, current)
 		return true
 	})
 	return unsafe
+}
+
+func isPipe(op syntax.BinCmdOperator) bool {
+	return op == syntax.Pipe || op == syntax.PipeAll
 }
 
 type outputRoute struct {
@@ -62,12 +81,15 @@ type outputRoute struct {
 }
 
 type destination struct {
-	file   string
-	id     int
-	closed bool
+	file        string
+	id          int
+	closed      bool
+	replCapture bool
 }
 
-var terminalRoute = outputRoute{stdout: destination{id: 1}, stderr: destination{id: 2}, nextID: 2}
+var terminalRoute = outputRoute{
+	stdout: destination{id: 1, replCapture: true}, stderr: destination{id: 2}, nextID: 2,
+}
 
 func (r outputRoute) merged() bool {
 	return !r.stdout.closed && r.stdout == r.stderr
@@ -82,7 +104,7 @@ func (r *outputRoute) newDestination(file string) destination {
 }
 
 // outputRouting は継承した出力先に、リダイレクトを左から適用する。
-func outputRouting(route outputRoute, redirs []*syntax.Redirect) outputRoute {
+func outputRouting(route outputRoute, redirs []*syntax.Redirect, merge bool) outputRoute {
 	for _, redir := range redirs {
 		op := redir.Op.String()
 		switch op {
@@ -92,6 +114,10 @@ func outputRouting(route outputRoute, redirs []*syntax.Redirect) outputRoute {
 		case ">", ">>", ">|", ">&", "<&":
 			route.redirect(redir, op)
 		}
+	}
+	// |& は左辺の明示的なリダイレクトを適用した後で stderr を stdout に合流させる。
+	if merge {
+		route.stderr = route.stdout
 	}
 	return route
 }
