@@ -165,9 +165,10 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=30 statusMessage=Checking PR body freshness..., " +
 			"generated-edit-guard",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
-			"forbidden-term-guard, idle-wait-guard, generated-edit-guard, blocking-command-guard",
+			"forbidden-term-guard, idle-wait-guard, generated-edit-guard, blocking-command-guard, pr-body-capture-warning",
 		"PreToolUse [Edit|Write|MultiEdit|NotebookEdit] git-hookspath-guard, irreversible-guard, generated-edit-guard",
 		"PreToolUse [ExitPlanMode] exit-plan-subagent-guard",
+		"PreToolUse [REPL] pr-body-capture-warning",
 		"UserPromptSubmit [(none)] pr-context timeout=15 statusMessage=Fetching PR context...",
 	}, "\n")
 	if got := hookLayout(t, filepath.Join(home, ".claude", "settings.json"), binary); got != claude {
@@ -179,7 +180,8 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 			"generated-edit-guard additionalContextLimit=4096",
 		"PreToolUse [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, forbidden-term-guard, idle-wait-guard, " +
-			"generated-edit-guard additionalContextLimit=4096, blocking-command-guard",
+			"generated-edit-guard additionalContextLimit=4096, blocking-command-guard, " +
+			"pr-body-capture-warning additionalContextLimit=4096",
 		"PreToolUse [^(apply_patch|Edit|Write)$] git-hookspath-guard, irreversible-guard, " +
 			"generated-edit-guard additionalContextLimit=4096",
 		"SessionStart [(none)] agents-local-context timeout=10 additionalContextLimit=32768",
