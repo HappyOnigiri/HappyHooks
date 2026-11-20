@@ -84,6 +84,10 @@ func TestREPL(t *testing.T) {
 		{"explicitly merged file", "await $`" + view + " > ${file} 2>&1`.text()", true},
 		{"view", "await $`gh pr view 12`.text()", false},
 		{"display only", "await $`" + view + "`", false},
+		{"shell example in a string", "const example = \"try $`" + view + "`.text()\"", false},
+		{"shell example in a comment", "// try $`" + view + "`.text()", false},
+		{"different template tag", "const body = await example$`" + view + "`.text()", false},
+		{"capture after a shell example", "const example = \"try $`" + view + "`.text()\"; await $`" + view + "`.text()", true},
 		{"other command capture", "await $`" + view + " > ${file}`; await $`git status`.text()", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

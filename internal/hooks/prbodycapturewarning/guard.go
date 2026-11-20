@@ -4,7 +4,6 @@ package prbodycapturewarning
 import (
 	"bytes"
 	"encoding/json"
-	"regexp"
 
 	"github.com/HappyOnigiri/hhx/internal/hookrt"
 )
@@ -38,10 +37,6 @@ func gate(input []byte) bool {
 			bytes.Contains(input, []byte(`2\u003e`)))
 }
 
-// 閉じバッククォートまでをシェル構文として読み、後続に .text() があれば REPL の合流も判定する。
-var replCapture = regexp.MustCompile("(?:^|[\\s(;=,])\\$\\s*`((?:[^`\\\\]|\\\\.)*)`" +
-	`(\s*\)?\s*(?:\.nothrow\(\)\s*)?\.text\s*\(\s*\))?`)
-
 func run(c *hookrt.Context) error {
 	payload, err := c.Payload()
 	if err != nil {
@@ -64,19 +59,7 @@ func run(c *hookrt.Context) error {
 			id = idMixedStreams
 		}
 	case "REPL":
-		if len(input.Code) > maxCodeBytes {
-			return nil
-		}
-		for _, match := range replCapture.FindAllStringSubmatch(input.Code, -1) {
-			capture := match[2] != ""
-			if unsafeCapture(match[1], capture) {
-				id = idMixedStreams
-				if capture {
-					id = idREPLCapture
-				}
-				break
-			}
-		}
+		id = replWarning(input.Code)
 	}
 	if id != "" {
 		c.AddContext(event, messages.T(c.Language(), id)+"\n"+messages.T(c.Language(), idAction))
