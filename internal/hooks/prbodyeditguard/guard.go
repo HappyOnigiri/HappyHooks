@@ -78,7 +78,7 @@ func run(c *hookrt.Context) error {
 	// 診断出力の候補がない本文では、比較のために GitHub を読まない。
 	lines := splitLines(proposed)
 	excluded := excludedLines(lines)
-	if firstFinding(lines, excluded, 0, len(lines)) == nil {
+	if !hasDiagnostic(lines, excluded) {
 		return nil
 	}
 	current, ok := currentBody(edit)
@@ -90,6 +90,13 @@ func run(c *hookrt.Context) error {
 		c.Deny(reason(c.Language(), findings, bodyDigest(proposed)))
 	}
 	return nil
+}
+
+func hasDiagnostic(lines []string, excluded []bool) bool {
+	for range diagnostics(lines, excluded, 0, len(lines)) {
+		return true
+	}
+	return false
 }
 
 func bodyDigest(body string) string {

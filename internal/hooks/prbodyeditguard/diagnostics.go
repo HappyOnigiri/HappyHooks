@@ -1,6 +1,7 @@
 package prbodyeditguard
 
 import (
+	"iter"
 	"regexp"
 	"strings"
 )
@@ -46,20 +47,54 @@ func edgeFindings(current string, proposed []string, excluded []bool) []finding 
 	if head >= 0 && tail >= 0 && head > tail {
 		return nil
 	}
-	var findings []finding
-	if head > 0 {
-		if found := firstFinding(proposed, excluded, 0, head); found != nil {
-			found.edge = idHead
-			findings = append(findings, *found)
-		}
+	if head <= 0 && (tail < 0 || tail == len(proposed)-1) {
+		return nil
 	}
-	if tail >= 0 {
-		if found := firstFinding(proposed, excluded, tail+1, len(proposed)); found != nil {
-			found.edge = idTail
-			findings = append(findings, *found)
+	remaining := existingDiagnostics(original, proposed)
+	var findings []finding
+	for _, edge := range []struct {
+		id         string
+		start, end int
+	}{
+		{idHead, 0, head},
+		{idTail, tail + 1, len(proposed)},
+	} {
+		if edge.id == idTail && tail < 0 {
+			continue
+		}
+		for found := range diagnostics(proposed, excluded, edge.start, edge.end) {
+			if count, exists := remaining[found.lines(proposed)]; exists && count >= 0 {
+				continue
+			}
+			found.edge = edge.id
+			findings = append(findings, found)
+			break
 		}
 	}
 	return findings
+}
+
+// existingDiagnostics は Markdown の装飾に関係なく、同じ診断行の並びが本文内で増えたかを数える。
+func existingDiagnostics(original, proposed []string) map[[4]string]int {
+	counts := make(map[[4]string]int)
+	for found := range diagnostics(original, nil, 0, len(original)) {
+		counts[found.lines(original)]++
+	}
+	if len(counts) > 0 {
+		for found := range diagnostics(proposed, nil, 0, len(proposed)) {
+			key := found.lines(proposed)
+			if _, exists := counts[key]; exists {
+				counts[key]--
+			}
+		}
+	}
+	return counts
+}
+
+func (f finding) lines(body []string) [4]string {
+	var lines [4]string
+	copy(lines[:], body[f.start-1:f.end])
+	return lines
 }
 
 func uniqueLine(lines []string, target string) int {
@@ -75,28 +110,34 @@ func uniqueLine(lines []string, target string) int {
 	return index
 }
 
-// firstFinding は start:end の範囲内で根拠のある最初の位置を返す。表示する行番号は 1 始まりにする。
-func firstFinding(lines []string, excluded []bool, start, end int) *finding {
-	for i := start; i < end; i++ {
-		if ansiColor.MatchString(lines[i]) {
-			return &finding{start: i + 1, end: i + 1, id: idANSI}
+// diagnostics は生の ANSI を先に探し、その後にログのまとまりを上から順に探す。行番号は 1 始まり。
+func diagnostics(lines []string, excluded []bool, start, end int) iter.Seq[finding] {
+	isExcluded := func(i int) bool {
+		return i < len(excluded) && excluded[i]
+	}
+	return func(yield func(finding) bool) {
+		for i := start; i < end; i++ {
+			if ansiColor.MatchString(lines[i]) && !yield(finding{start: i + 1, end: i + 1, id: idANSI}) {
+				return
+			}
+		}
+		for i := start; i+1 < end; i++ {
+			if isExcluded(i) || isExcluded(i+1) {
+				continue
+			}
+			if i+3 < end && !isExcluded(i+2) && !isExcluded(i+3) &&
+				diagnosticLabel.MatchString(lines[i]) && commandLine.MatchString(lines[i+1]) &&
+				diagnosticContinuation.MatchString(lines[i+2]) && diagnosticContinuation.MatchString(lines[i+3]) {
+				if !yield(finding{start: i + 1, end: i + 4, id: idGuidance}) {
+					return
+				}
+			}
+			prefix := logPrefix(lines[i])
+			if prefix != "" && prefix == logPrefix(lines[i+1]) && !yield(finding{start: i + 1, end: i + 2, id: idLogs}) {
+				return
+			}
 		}
 	}
-	for i := start; i+1 < end; i++ {
-		if excluded[i] || excluded[i+1] {
-			continue
-		}
-		if i+3 < end && !excluded[i+2] && !excluded[i+3] && diagnosticLabel.MatchString(lines[i]) &&
-			commandLine.MatchString(lines[i+1]) &&
-			diagnosticContinuation.MatchString(lines[i+2]) && diagnosticContinuation.MatchString(lines[i+3]) {
-			return &finding{start: i + 1, end: i + 4, id: idGuidance}
-		}
-		prefix := logPrefix(lines[i])
-		if prefix != "" && prefix == logPrefix(lines[i+1]) {
-			return &finding{start: i + 1, end: i + 2, id: idLogs}
-		}
-	}
-	return nil
 }
 
 func logPrefix(line string) string {

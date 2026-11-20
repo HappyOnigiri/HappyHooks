@@ -42,6 +42,17 @@ func TestEdgeDiagnostics(t *testing.T) {
 		{"ordinary preface and appendix", current, "Warning: deployment requires approval.\n\n" + edited + "\n\n- Verify CI.", nil},
 		{"guidance in existing section", current, strings.Replace(edited, "Updated text", hint, 1), nil},
 		{"existing diagnostic unchanged", color + "\n" + current, color + "\n" + edited, nil},
+		{"existing diagnostic moved", strings.Replace(current, "Previous text", hint, 1), hint + "\n" + edited, nil},
+		{
+			"existing diagnostic copied", strings.Replace(current, "Previous text", hint, 1),
+			hint + "\n" + strings.Replace(edited, "Updated text", hint, 1),
+			[]finding{{1, 4, idGuidance, idHead}},
+		},
+		{
+			"new diagnostic after existing diagnostic moved", strings.Replace(current, "Previous text", color, 1),
+			color + "\n" + hint + "\n" + edited,
+			[]finding{{2, 5, idGuidance, idHead}},
+		},
 		{
 			"detected terminal bytes in a code fence", current, edited + "\n```text\n" + color + "\n```",
 			[]finding{{8, 8, idANSI, idTail}},
