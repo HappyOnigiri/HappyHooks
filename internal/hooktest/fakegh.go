@@ -2,6 +2,7 @@ package hooktest
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,8 +21,12 @@ import (
 // フィクスチャのファイル名:
 //
 //	gh pr view <n> --repo <owner>/<repo>            → pr_<owner>_<repo>_<n>.json
+//	gh pr view <url>                              → pr_<owner>_<repo>_<n>.json
+//	gh pr view --json ... (GH_REPO=<owner>/<repo>) → pr_<owner>_<repo>_current.json
 //	gh api repos/<owner>/<repo>/pulls/comments/<id> → comment_<id>.json
 //	gh api graphql ...                              → graphql.json
+//
+// gh pr view の末尾が --json body --jq .body なら、JSON の body を標準出力に書く。
 //
 // 呼び出しごとに応答を変えるときは、拡張子の前に回数を挟んだ名前（graphql.2.json など）を置く。
 // 回数は同じフィクスチャへの何回目の呼び出しか（1 始まり）で、その名前のファイルが無ければ回数の無い名前を返す。
@@ -170,6 +175,16 @@ func runFakeGH(dir string, argv []string) int {
 		_, _ = os.Stderr.WriteString("fake gh: no fixture for " + strings.Join(argv, " ") + "\n")
 		return 1
 	}
+	if argv[0] == "pr" && len(argv) >= 6 && strings.Join(argv[len(argv)-4:], " ") == "--json body --jq .body" {
+		var result struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			return 1
+		}
+		_, _ = os.Stdout.WriteString(result.Body + "\n")
+		return 0
+	}
 	_, _ = os.Stdout.Write(data)
 	return 0
 }
@@ -202,6 +217,12 @@ func fixtureName(argv []string, repo string) string {
 		for index, arg := range argv {
 			if arg == "--repo" && index+1 < len(argv) {
 				return "pr_" + strings.ReplaceAll(argv[index+1], "/", "_") + "_" + argv[2] + ".json"
+			}
+		}
+		if target, err := url.Parse(argv[2]); err == nil && target.Host != "" {
+			parts := strings.Split(target.Path, "/")
+			if len(parts) == 5 && parts[3] == "pull" {
+				return "pr_" + strings.Join([]string{parts[1], parts[2], parts[4]}, "_") + ".json"
 			}
 		}
 	case len(argv) >= 2 && argv[0] == "api" && argv[1] == "graphql":

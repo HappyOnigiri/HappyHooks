@@ -163,7 +163,7 @@ func TestInstallWritesTheMigratedRegistrations(t *testing.T) {
 	claude := strings.Join([]string{
 		"PermissionRequest [Bash] permission-request-guard",
 		"PostToolUse [Bash] push-ci-context timeout=10, pr-body-staleness timeout=30 statusMessage=Checking PR body freshness..., " +
-			"generated-edit-guard",
+			"generated-edit-guard, pr-body-roundtrip timeout=10",
 		"PreToolUse [Bash] pr-merge-guard, discard-guard, git-hookspath-guard, irreversible-guard, dangerous-rm-guard, " +
 			"forbidden-term-guard, idle-wait-guard, generated-edit-guard, blocking-command-guard, pr-body-capture-warning, " +
 			"pr-body-edit-guard timeout=10",
