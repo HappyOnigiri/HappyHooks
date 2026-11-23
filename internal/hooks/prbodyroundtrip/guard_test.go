@@ -68,6 +68,11 @@ func TestPostToolUse(t *testing.T) {
 			args:     []string{"42", "--repo", "example/widget"},
 		},
 		{
+			name: "escaped space in body path", command: `gh pr edit 42 -R example/widget -F sent\ body.md`,
+			sent: sentBody, current: current, response: map[string]any{},
+			args: []string{"42", "--repo", "example/widget"},
+		},
+		{
 			name: "repo before pr", command: "gh -R example/widget pr edit 42 -F 'sent body.md'",
 			sent: sentBody, current: current, response: map[string]any{},
 			args: []string{"42", "--repo", "example/widget"},

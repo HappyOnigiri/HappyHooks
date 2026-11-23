@@ -264,6 +264,9 @@ func literal(word *syntax.Word) (string, bool) {
 			return "", false
 		}
 	}
-	value, err := expand.Literal(nil, word)
-	return value, err == nil
+	fields, err := expand.Fields(nil, word)
+	if err != nil || len(fields) != 1 {
+		return "", false
+	}
+	return fields[0], true
 }
