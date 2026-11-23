@@ -822,6 +822,17 @@ func TestInlineShellAllowed(t *testing.T) {
 	check(t, hooktest.Deny, denyAll(labelInlineUnchecked, `cat <<< x; bash -c 'echo {x,$y}; $CMD'`))
 }
 
+func TestInlineShellAwkPredicate(t *testing.T) {
+	const filter = `bash -c 'printf '"'"'%s\n'"'"' '"'"'400:row'"'"' | awk -F: '"'"'$1>=370 && $1<=420'"'"''`
+	check(t, "", hooktest.Commands(filter))
+	check(t, hooktest.Deny, denyAll(labelInlineUnchecked,
+		strings.TrimSuffix(filter, "'")+"; $CMD'",
+		`bash -c 'eval '"'"'$1 && $2'"'"''`,
+		`bash -c 'bash -c '"'"'$1 && $2'"'"''`,
+		strings.Replace(filter, "$1<=420", "$1<=420 {system($2)}", 1),
+	))
+}
+
 func TestInlineShellRemovalTarget(t *testing.T) {
 	check(t, hooktest.Deny, denyAll(labelInlineValue,
 		`bash -c 'rm -rf $1/*' _ "$(pwd)"`,
