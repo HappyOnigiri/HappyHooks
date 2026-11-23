@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -39,9 +40,11 @@ func Definition() hookrt.Definition {
 	}
 }
 
+var bodyFileShorthand = regexp.MustCompile(`-[df]*F`)
+
 func gate(input []byte) bool {
 	return bytes.Contains(input, []byte("gh")) && bytes.Contains(input, []byte("pr")) &&
-		(bytes.Contains(input, []byte("--body-file")) || bytes.Contains(input, []byte("-F")))
+		(bytes.Contains(input, []byte("--body-file")) || bodyFileShorthand.Match(input))
 }
 
 type payload struct {

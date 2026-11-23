@@ -156,6 +156,14 @@ func (r *request) parseArgs(args []*syntax.Word) bool {
 			r.selector = arg
 			continue
 		}
+		// 短い真偽値フラグは後ろに別の短いフラグを続けられる。
+		if len(arg) > 2 && !strings.HasPrefix(arg, "--") {
+			short := arg[1:]
+			for len(short) > 1 && short[1] != '=' && r.boolFlag("-"+short[:1]) {
+				short = short[1:]
+			}
+			arg = "-" + short
+		}
 		flag, value, joined := splitFlag(arg)
 		if r.boolFlag(flag) {
 			if joined {

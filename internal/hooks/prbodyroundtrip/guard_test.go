@@ -100,6 +100,11 @@ func TestPostToolUse(t *testing.T) {
 			args: []string{prURL},
 		},
 		{
+			name: "create with combined short flags", command: "gh pr create -dfF'sent body.md'",
+			sent: sentBody, current: current, response: prURL,
+			args: []string{prURL},
+		},
+		{
 			name: "create using combined output", command: "gh pr create -F 'sent body.md' --fill --draft=false",
 			sent: sentBody, current: current, response: map[string]any{"output": "notice\n" + prURL + "\n"},
 			args: []string{prURL},
