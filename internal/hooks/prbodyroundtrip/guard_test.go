@@ -180,6 +180,7 @@ func TestSilentOnUnsupportedOrFailedCommands(t *testing.T) {
 		{name: "logical parent", command: "cd ./symlink/.. && " + editCommand},
 		{name: "nonzero", command: editCommand, response: map[string]any{"exitCode": 7}},
 		{name: "interrupted", command: editCommand, response: map[string]any{"interrupted": true}},
+		{name: "background task", command: editCommand, response: map[string]any{"backgroundTaskId": "abc", "stdout": ""}},
 		{name: "failed status", command: editCommand + "; echo rc=$?", response: map[string]any{"stdout": "rc=1\n"}},
 		{name: "missing status", command: editCommand + "; echo rc=$?", response: map[string]any{}},
 		{name: "bad response shape", command: editCommand, response: []int{0}},

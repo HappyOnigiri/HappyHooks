@@ -105,6 +105,9 @@ func responseOutput(response any) (string, bool) {
 	case string:
 		return response, true
 	case map[string]any:
+		if _, pending := response["backgroundTaskId"]; pending {
+			return "", false
+		}
 		for _, key := range []string{"stdout", "output", "aggregated_output"} {
 			if value, ok := response[key].(string); ok {
 				return value, true
