@@ -824,9 +824,20 @@ func TestInlineShellAllowed(t *testing.T) {
 
 func TestInlineShellAwkPredicate(t *testing.T) {
 	const filter = `bash -c 'printf '"'"'%s\n'"'"' '"'"'400:row'"'"' | awk -F: '"'"'$1>=370 && $1<=420'"'"''`
-	check(t, "", hooktest.Commands(filter))
+	check(t, "", hooktest.Commands(
+		filter,
+		strings.Replace(filter, "-F:", `'"'"'-F:'"'"'`, 1),
+		strings.Replace(filter, "-F:", `-F'"'"':'"'"'`, 1),
+		strings.Replace(filter, "-F:", `-F":"`, 1),
+		strings.Replace(filter, "-F:", `-F '"'"':'"'"'`, 1),
+		strings.Replace(filter, "-F:", "-F :", 1),
+	))
 	check(t, hooktest.Deny, denyAll(labelInlineUnchecked,
 		strings.TrimSuffix(filter, "'")+"; $CMD'",
+		strings.Replace(filter, `'"'"'400:row'"'"'`, `"$(printf %s 400:row)"`, 1),
+		strings.Replace(filter, " -F:", "", 1),
+		strings.Replace(filter, "-F:", `-F"$SEP"`, 1),
+		strings.Replace(filter, "-F:", `-F $(printf %s :)`, 1),
 		`bash -c 'eval '"'"'$1 && $2'"'"''`,
 		`bash -c 'bash -c '"'"'$1 && $2'"'"''`,
 		strings.Replace(filter, "$1<=420", "$1<=420 {system($2)}", 1),
