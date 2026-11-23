@@ -180,6 +180,8 @@ func currentBody(req request) (string, bool) {
 	}
 	args = append(args, "--json", "body", "--jq", ".body")
 	body, ok := hookexec.Output(req.dir, fetchTimeout, "gh", args...)
+	// jq が出力に付ける LF を除き、本文末尾の単独 CR を CRLF として扱わない。
+	body = strings.TrimSuffix(body, "\n")
 	return body, ok && len(body) <= maxBodyBytes && utf8.ValidString(body)
 }
 

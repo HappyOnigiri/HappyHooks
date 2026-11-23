@@ -58,7 +58,7 @@ func TestPostToolUse(t *testing.T) {
 	}{
 		{
 			name: "equivalent", command: editCommand,
-			sent: "# Context\r\n\r\nExpected line\r\n\r\n", current: sentBody,
+			sent: "# Context\r\n\r\nExpected line\r\n\r\n", current: strings.TrimSuffix(sentBody, "\n"),
 			response: map[string]any{},
 			args:     []string{"42", "--repo", "example/widget"},
 		},
@@ -140,6 +140,32 @@ func TestPostToolUse(t *testing.T) {
 			want := messages.Text(hooktest.Language, idMismatch, map[string]any{"Diff": diff})
 			if got.Event != event || got.SystemMessage != "" || got.Context != want {
 				t.Errorf("injection = %+v, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestBodyEnding(t *testing.T) {
+	for _, tc := range []struct {
+		name, sent, github string
+		mismatch           bool
+	}{
+		{name: "both end in CR", sent: "Text\r", github: "Text\r"},
+		{name: "only GitHub ends in CR", sent: "Text", github: "Text\r", mismatch: true},
+		{name: "only file ends in CR", sent: "Text\r", github: "Text", mismatch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := hooktest.NewFakeGH(t)
+			dir := hooktest.TempDir(t)
+			writeFile(t, dir, "sent body.md", tc.sent)
+			gh.Write(t, "pr_example_widget_42.json", map[string]string{"body": tc.github})
+			payload := testPayload(t, dir, editCommand, map[string]any{})
+			out := hooktest.Output(t, Definition(), payload, hooktest.Options{})
+			if calls := gh.Calls(t); len(calls) != 1 {
+				t.Fatalf("expected one read, got %+v", calls)
+			}
+			if (out != "") != tc.mismatch {
+				t.Errorf("output = %q, want mismatch = %t", out, tc.mismatch)
 			}
 		})
 	}
