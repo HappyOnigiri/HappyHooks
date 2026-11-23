@@ -304,7 +304,7 @@ func mayRunRemoval(script string) bool {
 			removalListRE.MatchString(word)
 	}
 	isWrapper := func(word string) bool { return commandWrappers[strings.ToLower(baseName(word))] }
-	for _, words := range append(splitCommands(script, true), splitCommands(script, false)...) {
+	for _, words := range append(splitCommands(script, true), splitCommands(maskInlineAwkPredicate(script), false)...) {
 		for position, word := range words {
 			if isRemoval(word) {
 				for other, neighbor := range words {
