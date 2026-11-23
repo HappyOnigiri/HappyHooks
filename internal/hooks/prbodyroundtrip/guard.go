@@ -73,8 +73,8 @@ func run(c *hookrt.Context) error {
 	if !ok || req.checkStatus && !strings.HasSuffix("\n"+strings.TrimSpace(stdout), "\nrc=0") {
 		return nil
 	}
-	if req.create {
-		req.selector = createdPR(stdout)
+	if req.needsOutputURL() {
+		req.selector = prURLFromOutput(stdout)
 		req.repo = ""
 		if req.selector == "" {
 			return nil
@@ -119,8 +119,20 @@ func responseOutput(response any) (string, bool) {
 	}
 }
 
-// createdPR は stdout の PR URL が一意に決まるときに限り、その URL を返す。
-func createdPR(stdout string) string {
+// needsOutputURL は照合時にブランチから別の PR を選び直すのを防ぐ。
+func (r request) needsOutputURL() bool {
+	if r.create {
+		return true
+	}
+	if strings.HasPrefix(r.selector, "https://") || strings.HasPrefix(r.selector, "http://") {
+		return false
+	}
+	_, err := strconv.Atoi(strings.TrimPrefix(r.selector, "#"))
+	return err != nil
+}
+
+// prURLFromOutput は stdout の PR URL が一意に決まるときに限り、その URL を返す。
+func prURLFromOutput(stdout string) string {
 	var selector string
 	for line := range strings.SplitSeq(stdout, "\n") {
 		line = strings.TrimSpace(line)
@@ -162,19 +174,12 @@ func readBody(req request) (string, bool) {
 }
 
 func currentBody(req request) (string, bool) {
-	args := []string{"pr", "view"}
-	var env []string
-	if req.selector != "" {
-		args = append(args, req.selector)
-		if req.repo != "" {
-			args = append(args, "--repo", req.repo)
-		}
-	} else if req.repo != "" {
-		// gh pr view は --repo を指定すると PR の引数を要求する。
-		env = []string{"GH_REPO=" + req.repo}
+	args := []string{"pr", "view", req.selector}
+	if req.repo != "" {
+		args = append(args, "--repo", req.repo)
 	}
 	args = append(args, "--json", "body", "--jq", ".body")
-	body, ok := hookexec.OutputWithEnv(req.dir, fetchTimeout, env, "gh", args...)
+	body, ok := hookexec.Output(req.dir, fetchTimeout, "gh", args...)
 	return body, ok && len(body) <= maxBodyBytes && utf8.ValidString(body)
 }
 

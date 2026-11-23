@@ -54,7 +54,6 @@ func TestPostToolUse(t *testing.T) {
 		name, command, sent, current string
 		response                     any
 		args                         []string
-		repo                         string
 		cd                           bool
 	}{
 		{
@@ -86,13 +85,13 @@ func TestPostToolUse(t *testing.T) {
 		},
 		{
 			name: "edit after cd", command: "gh pr edit -Rexample/widget -F='sent body.md'",
-			sent: sentBody, current: current, response: map[string]any{},
-			args: []string{}, cd: true, repo: "example/widget",
+			sent: sentBody, current: current, response: prURL,
+			args: []string{prURL}, cd: true,
 		},
 		{
 			name: "edit with branch", command: "HHX_PR_BODY_ACK=abc gh pr edit -F'sent body.md' --repo=example/widget -- branch",
 			sent: sentBody, current: current, response: prURL,
-			args: []string{"branch", "--repo", "example/widget"},
+			args: []string{prURL},
 		},
 		{
 			name: "create using stdout", command: "gh pr create -R example/widget --title 'A new widget' --base main " +
@@ -117,9 +116,7 @@ func TestPostToolUse(t *testing.T) {
 				}
 			}
 			writeFile(t, reqDir, "sent body.md", tc.sent)
-			for _, key := range []string{"42", "branch", "current"} {
-				gh.Write(t, "pr_example_widget_"+key+".json", map[string]string{"body": tc.current})
-			}
+			gh.Write(t, "pr_example_widget_42.json", map[string]string{"body": tc.current})
 			command := tc.command
 			if tc.cd {
 				command = "cd '" + reqDir + "' && " + command
@@ -129,8 +126,8 @@ func TestPostToolUse(t *testing.T) {
 			calls := gh.Calls(t)
 			args := append([]string{"pr", "view"}, tc.args...)
 			args = append(args, "--json", "body", "--jq", ".body")
-			if len(calls) != 1 || !slices.Equal(calls[0].Argv, args) || calls[0].Cwd != reqDir || calls[0].Repo != tc.repo {
-				t.Fatalf("gh calls = %+v, want %v in %s with GH_REPO=%s", calls, args, reqDir, tc.repo)
+			if len(calls) != 1 || !slices.Equal(calls[0].Argv, args) || calls[0].Cwd != reqDir || calls[0].Repo != "" {
+				t.Fatalf("gh calls = %+v, want %v in %s with no GH_REPO", calls, args, reqDir)
 			}
 			if tc.name == "equivalent" {
 				if out != "" {
@@ -185,6 +182,8 @@ func TestSilentOnUnsupportedOrFailedCommands(t *testing.T) {
 		{name: "missing status", command: editCommand + "; echo rc=$?", response: map[string]any{}},
 		{name: "bad response shape", command: editCommand, response: []int{0}},
 		{name: "create without stdout URL", command: "gh pr create -F'sent body.md'", response: map[string]any{"stderr": prURL}},
+		{name: "branch without stdout URL", command: "gh pr edit -R example/widget branch -F'sent body.md'"},
+		{name: "implicit branch without stdout URL", command: "gh pr edit -R example/widget -F'sent body.md'"},
 		{
 			name: "combined output cannot override stdout", command: "gh pr create -F'sent body.md'",
 			response: map[string]any{"stdout": "", "output": prURL},
