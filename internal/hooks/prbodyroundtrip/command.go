@@ -43,10 +43,18 @@ func parseCommand(command, dir string) (request, bool) {
 	}
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok || !plain(stmt) || !outputRedirections(stmt.Redirs) || len(call.Args) < 3 ||
-		wordText(call.Args[0]) != "gh" || wordText(call.Args[1]) != "pr" {
+		wordText(call.Args[0]) != "gh" {
 		return request{}, false
 	}
-	switch wordText(call.Args[2]) {
+	args, ok := req.repoPrefix(call.Args[1:])
+	if !ok || len(args) == 0 || wordText(args[0]) != "pr" {
+		return request{}, false
+	}
+	args, ok = req.repoPrefix(args[1:])
+	if !ok || len(args) == 0 {
+		return request{}, false
+	}
+	switch wordText(args[0]) {
 	case "create":
 		req.create = true
 	case "edit":
@@ -63,8 +71,36 @@ func parseCommand(command, dir string) (request, bool) {
 			return request{}, false
 		}
 	}
-	ok = req.parseArgs(call.Args[3:])
+	ok = req.parseArgs(args[1:])
 	return req, ok
+}
+
+// repoPrefix は gh と pr の直後にも書けるリポジトリ指定を読む。
+func (r *request) repoPrefix(args []*syntax.Word) ([]*syntax.Word, bool) {
+	if len(args) == 0 {
+		return args, true
+	}
+	flag, value, joined := splitFlag(wordText(args[0]))
+	if flag != "--repo" && flag != "-R" {
+		return args, true
+	}
+	args = args[1:]
+	if !joined {
+		if len(args) == 0 {
+			return nil, false
+		}
+		value = wordText(args[0])
+		args = args[1:]
+	}
+	return args, r.setRepo(value)
+}
+
+func (r *request) setRepo(value string) bool {
+	if r.repo != "" || value == "" || strings.HasPrefix(value, "-") {
+		return false
+	}
+	r.repo = value
+	return true
 }
 
 func plain(stmt *syntax.Stmt) bool {
@@ -153,10 +189,9 @@ func (r *request) parseArgs(args []*syntax.Word) bool {
 			}
 			r.bodyFile = value
 		case "--repo", "-R":
-			if r.repo != "" || value == "" || strings.HasPrefix(value, "-") {
+			if !r.setRepo(value) {
 				return false
 			}
-			r.repo = value
 		case "--title", "-t", "--base", "-B", "--milestone", "-m":
 		default:
 			// --body や --attach など本文の出所や送信内容を変える指定を含む場合も対象外。

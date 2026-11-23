@@ -69,6 +69,16 @@ func TestPostToolUse(t *testing.T) {
 			args:     []string{"42", "--repo", "example/widget"},
 		},
 		{
+			name: "repo before pr", command: "gh -R example/widget pr edit 42 -F 'sent body.md'",
+			sent: sentBody, current: current, response: map[string]any{},
+			args: []string{"42", "--repo", "example/widget"},
+		},
+		{
+			name: "repo before edit", command: "gh pr --repo=example/widget edit 42 -F 'sent body.md'",
+			sent: sentBody, current: current, response: map[string]any{},
+			args: []string{"42", "--repo", "example/widget"},
+		},
+		{
 			name: "edit with url and status", command: "gh pr edit " + prURL +
 				" --body-file 'sent body.md' > './output file' 2>&1; echo rc=$?",
 			sent: sentBody, current: current, response: status,
@@ -152,6 +162,7 @@ func TestSilentOnUnsupportedOrFailedCommands(t *testing.T) {
 		{name: "body supplied twice", command: editCommand + " --body text"},
 		{name: "attachment alters body", command: editCommand + " --attach photo.png"},
 		{name: "missing flag value", command: editCommand + " -R"},
+		{name: "two repos", command: "gh -R example/other " + strings.TrimPrefix(editCommand, "gh ")},
 		{name: "alternate environment", command: "GH_HOST=other.example " + editCommand},
 		{name: "bad syntax", command: editCommand + " '"},
 		{name: "list", command: editCommand + "; true"},
