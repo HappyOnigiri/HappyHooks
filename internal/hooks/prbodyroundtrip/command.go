@@ -35,7 +35,7 @@ func parseCommand(command, dir string) (request, bool) {
 		req.checkStatus = true
 	}
 	if and, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && and.Op == syntax.AndStmt && plain(stmt) && len(stmt.Redirs) == 0 {
-		dir, ok := cdTarget(and.X, dir)
+		dir, ok := cdTarget(and.X)
 		if !ok {
 			return request{}, false
 		}
@@ -107,26 +107,19 @@ func plain(stmt *syntax.Stmt) bool {
 	return !stmt.Background && !stmt.Negated && !stmt.Coprocess
 }
 
-func cdTarget(stmt *syntax.Stmt, dir string) (string, bool) {
+func cdTarget(stmt *syntax.Stmt) (string, bool) {
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok || !plain(stmt) || len(stmt.Redirs) != 0 || len(call.Assigns) != 0 ||
 		len(call.Args) != 2 || wordText(call.Args[0]) != "cd" {
 		return "", false
 	}
 	target := wordText(call.Args[1])
-	// 論理 PWD とシンボリックリンクを解決しないと決められないパスを除く。
-	if slices.Contains(strings.Split(target, "/"), "..") {
+	// PostToolUse の cwd は cd 後のことがあるため、実行前の cwd を要する相対パスは追わない。
+	// 絶対パスでも、論理 PWD とシンボリックリンクで解釈が変わる .. は除く。
+	if !filepath.IsAbs(target) || slices.Contains(strings.Split(target, "/"), "..") {
 		return "", false
 	}
-	switch {
-	case filepath.IsAbs(target):
-		return target, true
-	case target == "." || strings.HasPrefix(target, "./"):
-		return dir + "/" + target, true
-	default:
-		// CDPATH によって通常の相対パスの解決は変わりうる。
-		return "", false
-	}
+	return target, true
 }
 
 func outputRedirections(redirs []*syntax.Redirect) bool {

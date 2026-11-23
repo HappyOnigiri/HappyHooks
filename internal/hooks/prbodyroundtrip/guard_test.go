@@ -85,7 +85,7 @@ func TestPostToolUse(t *testing.T) {
 			args: []string{prURL},
 		},
 		{
-			name: "edit after cd", command: "cd './elsewhere' && gh pr edit -Rexample/widget -F='sent body.md'",
+			name: "edit after cd", command: "gh pr edit -Rexample/widget -F='sent body.md'",
 			sent: sentBody, current: current, response: map[string]any{},
 			args: []string{}, cd: true, repo: "example/widget",
 		},
@@ -120,7 +120,11 @@ func TestPostToolUse(t *testing.T) {
 			for _, key := range []string{"42", "branch", "current"} {
 				gh.Write(t, "pr_example_widget_"+key+".json", map[string]string{"body": tc.current})
 			}
-			data := testPayload(t, dir, tc.command, tc.response)
+			command := tc.command
+			if tc.cd {
+				command = "cd '" + reqDir + "' && " + command
+			}
+			data := testPayload(t, dir, command, tc.response)
 			out := hooktest.Output(t, Definition(), data, hooktest.Options{})
 			calls := gh.Calls(t)
 			args := append([]string{"pr", "view"}, tc.args...)
@@ -218,6 +222,24 @@ func TestSilentOnUnsupportedOrFailedCommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSilentAfterRelativeCd(t *testing.T) {
+	gh := hooktest.NewFakeGH(t)
+	dir := hooktest.TempDir(t)
+	nested := filepath.Join(dir, "elsewhere")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, nested, "sent body.md", sentBody)
+	gh.Write(t, "pr_example_widget_42.json", map[string]string{"body": current})
+	payload := testPayload(t, dir, "cd ./elsewhere && "+editCommand, map[string]any{})
+	if out := hooktest.Output(t, Definition(), payload, hooktest.Options{}); out != "" {
+		t.Errorf("unexpected output: %q", out)
+	}
+	if calls := gh.Calls(t); len(calls) != 0 {
+		t.Fatalf("unexpected calls: %+v", calls)
 	}
 }
 
