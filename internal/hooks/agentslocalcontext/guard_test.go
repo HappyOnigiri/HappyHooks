@@ -172,6 +172,30 @@ func TestFallsBackToClaudeRulesInEachDirectory(t *testing.T) {
 	}
 }
 
+func TestFallsBackToClaudeProjectRulesIndependentlyOfLocalRules(t *testing.T) {
+	f := newFixture(t)
+	hooktest.WriteFile(t, filepath.Join(f.repo, projectRuleName), "root-project-agents\n")
+	hooktest.WriteFile(t, filepath.Join(f.repo, fallbackProjectRuleName), "root-project-claude\n")
+	src := filepath.Join(f.repo, "src")
+	project := filepath.Join(src, fallbackProjectRuleName)
+	hooktest.WriteFile(t, project, "src-project-claude\n")
+	hooktest.WriteFile(t, filepath.Join(src, fallbackRuleName), "src-local-claude\n")
+
+	for _, options := range []payloadOptions{{}, {event: "SubagentStart"}, {event: "SessionStart", source: "compact"}} {
+		context := f.run(t, options).Context
+		mustContain(t, context, "root-local", "src-local", "source: "+project, "src-project-claude")
+		mustNotContain(t, context, "root-project-agents", "root-project-claude", "src-local-claude")
+		if strings.Index(context, "src-project-claude") > strings.Index(context, "src-local") {
+			t.Fatalf("project rules must precede local rules in the same directory: %s", context)
+		}
+	}
+
+	hooktest.WriteFile(t, filepath.Join(src, projectRuleName), "src-project-agents\n")
+	compact := f.run(t, payloadOptions{event: "SessionStart", source: "compact"}).Context
+	mustContain(t, compact, "root-local", "src-local")
+	mustNotContain(t, compact, "src-project-claude", "src-project-agents")
+}
+
 func TestDifferentSessionGetsItsOwnContext(t *testing.T) {
 	f := newFixture(t)
 	if f.run(t, payloadOptions{}).Context == "" || f.run(t, payloadOptions{session: "session-2"}).Context == "" {
@@ -508,7 +532,11 @@ func TestRulePathsForTarget(t *testing.T) {
 	f := newFixture(t)
 	roots := &gitRoots{cache: map[string]gitRootResult{}}
 	paths, err := rulePathsForTarget(filepath.Join(f.nested, "missing", "deeper", "file.go"), roots)
-	want := []string{filepath.Join(f.repo, ruleName), filepath.Join(f.repo, "src", ruleName), filepath.Join(f.nested, ruleName)}
+	want := []string{
+		filepath.Join(f.repo, projectRuleName), filepath.Join(f.repo, ruleName),
+		filepath.Join(f.repo, "src", projectRuleName), filepath.Join(f.repo, "src", ruleName),
+		filepath.Join(f.nested, projectRuleName), filepath.Join(f.nested, ruleName),
+	}
 	if err != nil || strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths=%q err=%v", paths, err)
 	}

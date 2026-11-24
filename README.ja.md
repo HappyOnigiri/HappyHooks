@@ -33,7 +33,7 @@ Happy Hooks は、Claude Code と Codex が長時間の作業を滞りなく進�
 | [`pr-body-capture-warning`](docs/hooks/pr-body-capture-warning.ja.md) | PR 本文の取得時に診断出力が混ざる可能性を知らせる | 有効 |
 | [`pr-body-edit-guard`](docs/hooks/pr-body-edit-guard.ja.md) | PR 本文の先頭・末尾に診断出力の混入が疑われるとき、送信を止める | 有効 |
 | [`pr-body-roundtrip`](docs/hooks/pr-body-roundtrip.ja.md) | 送信したファイルと GitHub 上の PR 本文の差分を知らせる | 有効（Claude Code） |
-| [`agents-local-context`](docs/hooks/agents-local-context.ja.md) | `AGENTS.local.md` または `CLAUDE.local.md` のルールを読み込む | 有効（Codex） |
+| [`agents-local-context`](docs/hooks/agents-local-context.ja.md) | ローカルルールを追加し、Codex 用のファイルがなければ Claude Code 用のファイルを読む | 有効（Codex） |
 
 ## インストール
 

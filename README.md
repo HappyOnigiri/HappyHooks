@@ -33,7 +33,7 @@ Command guards inspect text statically. They catch common mistakes, but are not 
 | [`pr-body-capture-warning`](docs/hooks/pr-body-capture-warning.md) | Warns when fetching a PR body can mix it with diagnostic output | On |
 | [`pr-body-edit-guard`](docs/hooks/pr-body-edit-guard.md) | Stops PR edits that appear to add diagnostic output at either end of the body | On |
 | [`pr-body-roundtrip`](docs/hooks/pr-body-roundtrip.md) | Shows differences between a sent PR body file and the body on GitHub | On (Claude Code) |
-| [`agents-local-context`](docs/hooks/agents-local-context.md) | Adds local rules from `AGENTS.local.md` or `CLAUDE.local.md` | On (Codex) |
+| [`agents-local-context`](docs/hooks/agents-local-context.md) | Adds local rules and falls back to Claude Code rule files | On (Codex) |
 
 ## Install
 
