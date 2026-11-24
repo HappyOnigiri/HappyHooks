@@ -1,4 +1,4 @@
-// Package agentslocalcontext は、Codex にディレクトリ固有の AGENTS.local.md を追加で注入する hook（agents-local-context）である。
+// Package agentslocalcontext は、Codex にディレクトリ固有のローカルルールを注入する。
 //
 // SessionStart と PreToolUse で、対象のパスに適用されるファイルを Git のルートから順に探し、
 // 同じセッションへ未注入か内容が変わったものだけを developer context として返す。
@@ -42,7 +42,8 @@ import (
 const Name = "agents-local-context"
 
 const (
-	ruleName = "AGENTS.local.md"
+	ruleName         = "AGENTS.local.md"
+	fallbackRuleName = "CLAUDE.local.md"
 	// maxContextBytes は注入の合計の上限である。Codex の additionalContextLimit（登録の値）と同じにする。
 	maxContextBytes = 32 * 1024
 	stateTTL        = 30 * 24 * time.Hour
@@ -51,7 +52,7 @@ const (
 	lockTimeout = 3 * time.Second
 )
 
-// Definition は agents-local-context の定義を返す。Codex にだけ登録する（Claude Code は AGENTS.local.md を読まない）。
+// Definition は Codex に登録する agents-local-context の定義を返す。
 func Definition() hookrt.Definition {
 	registration := func(event, matcher string) hookrt.Registration {
 		return hookrt.Registration{
@@ -91,9 +92,14 @@ var (
 	sessionUnsafeRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 )
 
-// rule は注入する AGENTS.local.md 1 つである。
+// rule は注入するローカルルール 1 つである。
 type rule struct {
 	path, scope, digest, text string
+}
+
+// stateKey はファイル名が切り替わっても同じディレクトリを指す。既存の状態との互換性のため優先ファイル名を使う。
+func (r rule) stateKey() string {
+	return py.Join(r.scope, ruleName)
 }
 
 func (r rule) context() string {
@@ -507,9 +513,16 @@ func applicableRules(payload map[string]any, roots *gitRoots, t texts) ([]rule, 
 	return rules, warnings, nil
 }
 
-// readRule は path のルールを読む。通常のファイルでなければ found は偽になり、読めなければ警告を返す。
+// readRule は優先ファイルを読む。そのパスが存在しないときだけ同じディレクトリの代替ファイルを読む。
 func readRule(path string, t texts) (rule, bool, string) {
 	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// リンク先が消えたシンボリックリンクも、優先ファイルの指定として扱う。
+		if _, lookupErr := os.Lstat(path); errors.Is(lookupErr, os.ErrNotExist) {
+			path = py.Join(parent(path), fallbackRuleName)
+			info, err = os.Stat(path)
+		}
+	}
 	if err != nil || !info.Mode().IsRegular() {
 		return rule{}, false, ""
 	}
@@ -645,14 +658,14 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 		changed -= len(state.Rules)
 		var pending []rule
 		for _, rule := range rules {
-			if entry, ok := state.Rules[rule.path]; ok && entry.Digest == rule.digest {
+			if entry, ok := state.Rules[rule.stateKey()]; ok && entry.Digest == rule.digest {
 				continue
 			}
 			pending = append(pending, rule)
 		}
 		claimed, warnings = fitContext(pending, s.texts)
 		for _, rule := range claimed {
-			state.Rules[rule.path] = stateEntry{Digest: rule.digest, LoadedAt: now}
+			state.Rules[rule.stateKey()] = stateEntry{Digest: rule.digest, LoadedAt: now}
 		}
 		if len(claimed) == 0 && changed == 0 {
 			return nil
@@ -709,7 +722,7 @@ func (s *stateStore) replace(sessionID string, rules []rule) []string {
 		state := stateFile{Rules: map[string]stateEntry{}}
 		now := time.Now().Unix()
 		for _, rule := range rules {
-			state.Rules[rule.path] = stateEntry{Digest: rule.digest, LoadedAt: now}
+			state.Rules[rule.stateKey()] = stateEntry{Digest: rule.digest, LoadedAt: now}
 		}
 		return s.save(sessionID, state)
 	})
