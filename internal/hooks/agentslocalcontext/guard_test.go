@@ -144,6 +144,58 @@ func TestContentChangeIsReinjected(t *testing.T) {
 	mustNotContain(t, context, "root-local")
 }
 
+func TestFallsBackToClaudeRulesInEachDirectory(t *testing.T) {
+	f := newFixture(t)
+	hooktest.WriteFile(t, filepath.Join(f.repo, fallbackRuleName), "root-claude\n")
+	src := filepath.Join(f.repo, "src")
+	primary := filepath.Join(src, ruleName)
+	fallback := filepath.Join(src, fallbackRuleName)
+	hooktest.WriteFile(t, fallback, "src-claude\n")
+	if err := os.Remove(primary); err != nil {
+		t.Fatal(err)
+	}
+
+	start := f.run(t, payloadOptions{event: "SessionStart", source: "startup", cwd: f.nested}).Context
+	mustContain(t, start, "root-local", "src-claude", "source: "+fallback)
+	mustNotContain(t, start, "root-claude")
+	if again := f.run(t, payloadOptions{}); again.Context != "" {
+		t.Fatalf("fallback must also be deduplicated: %+v", again)
+	}
+	mustContain(t, f.run(t, payloadOptions{event: "SubagentStart"}).Context, "root-local", "src-claude")
+
+	hooktest.WriteFile(t, primary, "src-agents\n")
+	compact := f.run(t, payloadOptions{event: "SessionStart", source: "compact"}).Context
+	mustContain(t, compact, "root-local", "src-agents", "source: "+primary)
+	mustNotContain(t, compact, "src-claude", "root-claude")
+	if again := f.run(t, payloadOptions{}); again.Context != "" {
+		t.Fatalf("the restored primary rule must be deduplicated: %+v", again)
+	}
+}
+
+func TestFallsBackToClaudeProjectRulesIndependentlyOfLocalRules(t *testing.T) {
+	f := newFixture(t)
+	hooktest.WriteFile(t, filepath.Join(f.repo, projectRuleName), "root-project-agents\n")
+	hooktest.WriteFile(t, filepath.Join(f.repo, fallbackProjectRuleName), "root-project-claude\n")
+	src := filepath.Join(f.repo, "src")
+	project := filepath.Join(src, fallbackProjectRuleName)
+	hooktest.WriteFile(t, project, "src-project-claude\n")
+	hooktest.WriteFile(t, filepath.Join(src, fallbackRuleName), "src-local-claude\n")
+
+	for _, options := range []payloadOptions{{}, {event: "SubagentStart"}, {event: "SessionStart", source: "compact"}} {
+		context := f.run(t, options).Context
+		mustContain(t, context, "root-local", "src-local", "source: "+project, "src-project-claude")
+		mustNotContain(t, context, "root-project-agents", "root-project-claude", "src-local-claude")
+		if strings.Index(context, "src-project-claude") > strings.Index(context, "src-local") {
+			t.Fatalf("project rules must precede local rules in the same directory: %s", context)
+		}
+	}
+
+	hooktest.WriteFile(t, filepath.Join(src, projectRuleName), "src-project-agents\n")
+	compact := f.run(t, payloadOptions{event: "SessionStart", source: "compact"}).Context
+	mustContain(t, compact, "root-local", "src-local")
+	mustNotContain(t, compact, "src-project-claude", "src-project-agents")
+}
+
 func TestDifferentSessionGetsItsOwnContext(t *testing.T) {
 	f := newFixture(t)
 	if f.run(t, payloadOptions{}).Context == "" || f.run(t, payloadOptions{session: "session-2"}).Context == "" {
@@ -208,12 +260,14 @@ func TestStateFailureWarnsAndStillInjects(t *testing.T) {
 
 func TestRuleReadFailureWarnsAndKeepsOtherContext(t *testing.T) {
 	f := newFixture(t)
+	hooktest.WriteFile(t, filepath.Join(f.repo, "src", fallbackRuleName), "src-claude\n")
 	if err := os.WriteFile(filepath.Join(f.repo, "src", ruleName), []byte{0xff, 0xfe}, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	injection := f.run(t, payloadOptions{})
 	mustContain(t, injection.SystemMessage, messages.Text(hooktest.Language, idReadRule, map[string]any{"Path": f.repo + "/src/AGENTS.local.md", "Error": ""}))
 	mustContain(t, injection.Context, "root-local")
+	mustNotContain(t, injection.Context, "src-claude")
 }
 
 func TestInvalidInputWarns(t *testing.T) {
@@ -478,7 +532,11 @@ func TestRulePathsForTarget(t *testing.T) {
 	f := newFixture(t)
 	roots := &gitRoots{cache: map[string]gitRootResult{}}
 	paths, err := rulePathsForTarget(filepath.Join(f.nested, "missing", "deeper", "file.go"), roots)
-	want := []string{filepath.Join(f.repo, ruleName), filepath.Join(f.repo, "src", ruleName), filepath.Join(f.nested, ruleName)}
+	want := []string{
+		filepath.Join(f.repo, projectRuleName), filepath.Join(f.repo, ruleName),
+		filepath.Join(f.repo, "src", projectRuleName), filepath.Join(f.repo, "src", ruleName),
+		filepath.Join(f.nested, projectRuleName), filepath.Join(f.nested, ruleName),
+	}
 	if err != nil || strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths=%q err=%v", paths, err)
 	}

@@ -1,4 +1,4 @@
-// Package agentslocalcontext は、Codex にディレクトリ固有の AGENTS.local.md を追加で注入する hook（agents-local-context）である。
+// Package agentslocalcontext は、Codex にディレクトリ固有のルールを追加で注入する。
 //
 // SessionStart と PreToolUse で、対象のパスに適用されるファイルを Git のルートから順に探し、
 // 同じセッションへ未注入か内容が変わったものだけを developer context として返す。
@@ -42,7 +42,10 @@ import (
 const Name = "agents-local-context"
 
 const (
-	ruleName = "AGENTS.local.md"
+	projectRuleName         = "AGENTS.md"
+	fallbackProjectRuleName = "CLAUDE.md"
+	ruleName                = "AGENTS.local.md"
+	fallbackRuleName        = "CLAUDE.local.md"
 	// maxContextBytes は注入の合計の上限である。Codex の additionalContextLimit（登録の値）と同じにする。
 	maxContextBytes = 32 * 1024
 	stateTTL        = 30 * 24 * time.Hour
@@ -51,7 +54,7 @@ const (
 	lockTimeout = 3 * time.Second
 )
 
-// Definition は agents-local-context の定義を返す。Codex にだけ登録する（Claude Code は AGENTS.local.md を読まない）。
+// Definition は Codex に登録する agents-local-context の定義を返す。
 func Definition() hookrt.Definition {
 	registration := func(event, matcher string) hookrt.Registration {
 		return hookrt.Registration{
@@ -91,9 +94,10 @@ var (
 	sessionUnsafeRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 )
 
-// rule は注入する AGENTS.local.md 1 つである。
+// rule は注入するルール 1 つである。
 type rule struct {
-	path, scope, digest, text string
+	// key には優先ファイルのパスを使い、代替ファイルに切り替わっても同じ場所を指す。
+	key, path, scope, digest, text string
 }
 
 func (r rule) context() string {
@@ -417,7 +421,7 @@ func nearestExistingDirectory(target string) (string, bool) {
 	return parent(candidate), true
 }
 
-// rulePathsForTarget は target に適用される AGENTS.local.md の候補を、Git のルートから target の階層まで返す。
+// rulePathsForTarget は Git のルートから target の階層まで、優先ファイルの候補を返す。
 func rulePathsForTarget(target string, roots *gitRoots) ([]string, error) {
 	scope, ok := nearestExistingDirectory(target)
 	if !ok {
@@ -447,9 +451,9 @@ func rulePathsForTarget(target string, roots *gitRoots) ([]string, error) {
 		current = py.Join(current, part)
 		directories = append(directories, current)
 	}
-	paths := make([]string, len(directories))
-	for index, directory := range directories {
-		paths[index] = py.Join(directory, ruleName)
+	paths := make([]string, 0, 2*len(directories))
+	for _, directory := range directories {
+		paths = append(paths, py.Join(directory, projectRuleName), py.Join(directory, ruleName))
 	}
 	return paths, nil
 }
@@ -468,7 +472,21 @@ func partCount(path string) int {
 	return count
 }
 
-// applicableRules は payload の対象に適用されるルールを、浅い順（同じ深さはバイト列の順）に読む。
+// sortRulePaths は階層の浅い順に並べ、同じディレクトリでは通常ルールを先にする。
+func sortRulePaths(paths []string) {
+	sort.Slice(paths, func(i, j int) bool {
+		left, right := paths[i], paths[j]
+		if leftDepth, rightDepth := partCount(left), partCount(right); leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+		if leftDir, rightDir := parent(left), parent(right); leftDir != rightDir {
+			return leftDir < rightDir
+		}
+		return left != right && filepath.Base(left) == projectRuleName
+	})
+}
+
+// applicableRules は payload の対象に適用されるルールを読む。
 func applicableRules(payload map[string]any, roots *gitRoots, t texts) ([]rule, []string, error) {
 	targets, warnings, err := targetPaths(payload, t)
 	if err != nil {
@@ -488,12 +506,7 @@ func applicableRules(payload map[string]any, roots *gitRoots, t texts) ([]rule, 
 	for path := range unique {
 		ordered = append(ordered, path)
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if left, right := partCount(ordered[i]), partCount(ordered[j]); left != right {
-			return left < right
-		}
-		return ordered[i] < ordered[j]
-	})
+	sortRulePaths(ordered)
 	var rules []rule
 	for _, path := range ordered {
 		rule, found, warning := readRule(path, t)
@@ -507,9 +520,25 @@ func applicableRules(payload map[string]any, roots *gitRoots, t texts) ([]rule, 
 	return rules, warnings, nil
 }
 
-// readRule は path のルールを読む。通常のファイルでなければ found は偽になり、読めなければ警告を返す。
-func readRule(path string, t texts) (rule, bool, string) {
-	info, err := os.Stat(path)
+// readRule はローカルルールか、優先ファイルが存在しない場合の代替ファイルを読む。
+func readRule(preferredPath string, t texts) (rule, bool, string) {
+	path := preferredPath
+	// リンク先が消えたシンボリックリンクも、優先ファイルの指定として扱う。
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		fallback := fallbackProjectRuleName
+		if filepath.Base(path) == ruleName {
+			fallback = fallbackRuleName
+		}
+		path = py.Join(parent(path), fallback)
+		info, err = os.Stat(path)
+	case filepath.Base(path) == projectRuleName:
+		// AGENTS.md は Codex が読むため、hook からは注入しない。
+		return rule{}, false, ""
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		info, err = os.Stat(path)
+	}
 	if err != nil || !info.Mode().IsRegular() {
 		return rule{}, false, ""
 	}
@@ -521,7 +550,13 @@ func readRule(path string, t texts) (rule, bool, string) {
 		return rule{}, false, t.warn(idReadRuleNotUTF8, map[string]any{"Path": path})
 	}
 	sum := sha256.Sum256(data)
-	return rule{path: path, scope: parent(path), digest: hex.EncodeToString(sum[:]), text: string(data)}, true, ""
+	return rule{
+		key:    preferredPath,
+		path:   path,
+		scope:  parent(path),
+		digest: hex.EncodeToString(sum[:]),
+		text:   string(data),
+	}, true, ""
 }
 
 // --- 状態 ------------------------------------------------------------------------
@@ -645,14 +680,14 @@ func (s *stateStore) claim(sessionID string, rules []rule) ([]rule, []string) {
 		changed -= len(state.Rules)
 		var pending []rule
 		for _, rule := range rules {
-			if entry, ok := state.Rules[rule.path]; ok && entry.Digest == rule.digest {
+			if entry, ok := state.Rules[rule.key]; ok && entry.Digest == rule.digest {
 				continue
 			}
 			pending = append(pending, rule)
 		}
 		claimed, warnings = fitContext(pending, s.texts)
 		for _, rule := range claimed {
-			state.Rules[rule.path] = stateEntry{Digest: rule.digest, LoadedAt: now}
+			state.Rules[rule.key] = stateEntry{Digest: rule.digest, LoadedAt: now}
 		}
 		if len(claimed) == 0 && changed == 0 {
 			return nil
@@ -684,7 +719,7 @@ func (s *stateStore) restored(sessionID string) ([]rule, []string) {
 	if err != nil {
 		return nil, []string{s.texts.warn(idStateStored, map[string]any{"Error": err.Error()})}
 	}
-	sort.Strings(paths)
+	sortRulePaths(paths)
 	var rules []rule
 	var warnings []string
 	for _, path := range paths {
@@ -709,7 +744,7 @@ func (s *stateStore) replace(sessionID string, rules []rule) []string {
 		state := stateFile{Rules: map[string]stateEntry{}}
 		now := time.Now().Unix()
 		for _, rule := range rules {
-			state.Rules[rule.path] = stateEntry{Digest: rule.digest, LoadedAt: now}
+			state.Rules[rule.key] = stateEntry{Digest: rule.digest, LoadedAt: now}
 		}
 		return s.save(sessionID, state)
 	})
